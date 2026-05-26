@@ -957,13 +957,18 @@ class SLDApp(tk.Tk):
                   foreground='gray', font=('Segoe UI', 9)).pack(anchor='w')
 
     def _set_icon(self):
+        """Set window and taskbar icon from A176LAB logo."""
         try:
             from PIL import Image, ImageTk
-            img = Image.open(_LOGO_PATH).resize((32, 32), Image.LANCZOS)
+            img = Image.open(_LOGO_PATH).convert('RGBA')
+            # Resize to 256x256 for better quality at multiple DPI scales
+            img.thumbnail((256, 256), Image.LANCZOS)
             self._icon_ref = ImageTk.PhotoImage(img)
+            # True = use for all windows in this app (sets taskbar icon on Windows)
             self.iconphoto(True, self._icon_ref)
-        except Exception:
-            pass
+        except Exception as ex:
+            import sys
+            print(f"[warn] could not set window icon: {ex}", file=sys.stderr)
 
     # Files tab ----------------------------------------------------------------
 
