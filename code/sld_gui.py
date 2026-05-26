@@ -60,6 +60,59 @@ _STRING_LABEL_MIN_WIDTH = 3_000
 PORT_RE   = re.compile(r'^\d+-\d+$')
 STRING_RE = re.compile(r'String \d+\.\d+\.\d+')
 
+# Panel model → typical Wp rating for autofill
+_PANEL_POWERS = {
+    'JA Solar JAM72D42-625/LB': '625',
+    'JA Solar JAM72S20-460/MR': '460',
+    'Longi Solar LR5-72HBD-580M': '580',
+    'Longi Solar LR5-72HBD-545M': '545',
+    'Canadian Solar HiKu7 CS7N-655MB': '655',
+    'Jinko Solar JKM660M-78HL4-V': '660',
+    'Trina Solar TSM-670NEG21C.20': '670',
+    'REC Alpha Pure-R 430AA': '430',
+}
+
+# Inverter model → (DC KWp, AC KWac) for autofill
+# Latest 2024-2025 commercial string inverters
+_INVERTER_POWERS = {
+    # Sungrow (market leader)
+    'Sungrow SG100HX': ('100', '100'),
+    'Sungrow SG125HX': ('125', '125'),
+    'Sungrow SG250HX': ('250', '250'),
+    'Sungrow SG350HX': ('350', '350'),
+    'Sungrow SG500HX': ('500', '500'),
+    # Huawei
+    'Huawei SUN2000-100KTL-M3': ('100', '100'),
+    'Huawei SUN2000-215KTL-H3': ('215', '160'),
+    'Huawei SUN2000-275KTL-H1': ('275', '220'),
+    'Huawei SUN2000-330KTL': ('330', '275'),
+    'Huawei SUN2000-450KTL-H1': ('450', '400'),
+    # ABB
+    'ABB PVS-120-TL': ('120', '120'),
+    'ABB PVS-250-TL': ('250', '220'),
+    'ABB PVS-350-TL': ('350', '280'),
+    'ABB PVS-500-TL': ('500', '400'),
+    # SMA (Sunny Tripower)
+    'SMA Sunny Tripower Core1 25': ('25', '25'),
+    'SMA Sunny Tripower Core2 150': ('150', '150'),
+    'SMA Sunny Tripower 25000TL': ('25', '25'),
+    'SMA Sunny Tripower 60000TL': ('60', '60'),
+    'SMA Sunny Tripower 100000TL': ('100', '100'),
+    # Fronius (Symo GEN24)
+    'Fronius Symo GEN24 25.0 Plus': ('25', '25'),
+    'Fronius Symo GEN24 50.0 Plus': ('50', '50'),
+    'Fronius Symo GEN24 60.0 Plus': ('60', '60'),
+    'Fronius Symo GEN24 100.0 Plus': ('100', '100'),
+    # Power Electronics / KACO
+    'KACO blueplanet 100.0 TL3': ('100', '100'),
+    'KACO blueplanet 125.0 TL3': ('125', '125'),
+    'KACO blueplanet 250.0 TL3': ('250', '250'),
+    # Growatt
+    'Growatt 50000MT': ('50', '50'),
+    'Growatt 60000MT': ('60', '60'),
+    'Growatt 100000MT': ('100', '100'),
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GENERATION — HELPERS  (module-level, fully testable)
@@ -675,10 +728,11 @@ class _HistoryCombo(ttk.Frame):
     """Label + editable Combobox + optional unit, backed by _HistoryStore."""
 
     def __init__(self, parent, label, history_key, default='', unit='', width=28,
-                 refresh_callback=None, **kw):
+                 refresh_callback=None, on_select=None, **kw):
         super().__init__(parent, **kw)
         self._key        = history_key
         self._refresh_cb = refresh_callback
+        self._select_cb  = on_select
         ttk.Label(self, text=label, width=26, anchor='e').pack(side='left', **_PAD)
         self.var = tk.StringVar(value=default)
         self._combo = ttk.Combobox(self, textvariable=self.var, width=width,
@@ -688,6 +742,13 @@ class _HistoryCombo(ttk.Frame):
             ttk.Label(self, text=unit, foreground='gray').pack(side='left')
         ttk.Button(self, text='...', width=3,
                    command=self._open_manager).pack(side='left', padx=(6, 0))
+        # Bind selection event for autofill
+        self._combo.bind('<<ComboboxSelected>>', self._on_combo_select)
+
+    def _on_combo_select(self, event=None):
+        """Called when user selects from dropdown; triggers on_select callback."""
+        if self._select_cb:
+            self._select_cb(self.get())
 
     def _open_manager(self):
         root = self.winfo_toplevel()
@@ -1015,11 +1076,25 @@ class SLDApp(tk.Tk):
         tab = ttk.Frame(nb, padding=14)
         nb.add(tab, text='  Equipment  ')
 
+        # Autofill callbacks
+        def _on_panel_model_select(model):
+            """Auto-fill panel power when model is selected."""
+            if model in _PANEL_POWERS:
+                self.f_panel_power.var.set(_PANEL_POWERS[model])
+
+        def _on_inverter_model_select(model):
+            """Auto-fill DC and AC power when inverter model is selected."""
+            if model in _INVERTER_POWERS:
+                dc, ac = _INVERTER_POWERS[model]
+                self.f_dc_power.var.set(dc)
+                self.f_ac_power.var.set(ac)
+
         # Solar Panel section
         self._section(tab, "Solar Panel")
         self.f_panel_model = _HistoryCombo(
             tab, "Panel Model:", 'panel_model',
-            refresh_callback=self._refresh_all_combos)
+            refresh_callback=self._refresh_all_combos,
+            on_select=_on_panel_model_select)
         self.f_panel_model.pack(fill='x')
 
         self.f_panel_power = _HistoryCombo(
@@ -1040,7 +1115,8 @@ class SLDApp(tk.Tk):
         self._section(tab, "Inverter")
         self.f_inv_model = _HistoryCombo(
             tab, "Inverter Model:", 'inverter_model',
-            refresh_callback=self._refresh_all_combos)
+            refresh_callback=self._refresh_all_combos,
+            on_select=_on_inverter_model_select)
         self.f_inv_model.pack(fill='x')
 
         self.f_dc_power = _HistoryCombo(
@@ -1071,7 +1147,9 @@ class SLDApp(tk.Tk):
         note = (
             "Auto-calculate DC power: set 'DC Power per Inverter' to 0 and fill in "
             "Panel Power + Panels per String.  The script counts strings per inverter "
-            "from the Excel file and computes: strings × panels × Wp ÷ 1000."
+            "from the Excel file and computes: strings × panels × Wp ÷ 1000.\n\n"
+            "Tip: Select a panel or inverter model to auto-fill power ratings. "
+            "You can always override by editing the fields manually."
         )
         ttk.Label(tab, text=note, foreground='gray',
                   wraplength=720, justify='left').pack(anchor='w')
