@@ -1,0 +1,63 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyw~
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+*.egg
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# ── Generated / output DXF files ─────────────────────────────────────────────
+*_Generated.dxf
+*_generated.dxf
+*_SLD_*.dxf
+
+# ── Large binary source files (keep template DXF via Git LFS or manual copy) ──
+# Template DXF (36 MB) – track with Git LFS instead:
+#   git lfs track "*.dxf"
+YANEL/*.dxf
+Example/*.dxf
+Example/*.dwg
+"2025.017 - PV WYMONDLEY"/*.dxf
+
+# ── Project data / cable lists (client-specific Excel files) ─────────────────
+YANEL/*.xlsx
+Example/*.xlsx
+2025.017*/
+
+# ── IDE / editor ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.suo
+*.user
+.vs/
+
+# ── Windows ───────────────────────────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Logs / temp ───────────────────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+*.swp
