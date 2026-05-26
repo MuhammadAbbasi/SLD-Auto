@@ -61,17 +61,6 @@ PORT_RE   = re.compile(r'^\d+-\d+$')
 STRING_RE = re.compile(r'String \d+\.\d+\.\d+')
 
 # Panel model → typical Wp rating for autofill
-_PANEL_POWERS = {
-    'JA Solar JAM72D42-625/LB': '625',
-    'JA Solar JAM72S20-460/MR': '460',
-    'Longi Solar LR5-72HBD-580M': '580',
-    'Longi Solar LR5-72HBD-545M': '545',
-    'Canadian Solar HiKu7 CS7N-655MB': '655',
-    'Jinko Solar JKM660M-78HL4-V': '660',
-    'Trina Solar TSM-670NEG21C.20': '670',
-    'REC Alpha Pure-R 430AA': '430',
-}
-
 # Inverter model → (DC KWp, AC KWac) for autofill
 # Latest 2024-2025 commercial string inverters
 _INVERTER_POWERS = {
@@ -247,8 +236,12 @@ def _classify_mtext(txt):
         return 'cabin_label'
     if re.match(r'^CABIN \d+$', c):
         return 'cabin_header'
-    # "28 PV modules in series - …" is the wide top-slot label for port 1-1
-    if STRING_RE.search(txt) or c == 'reserve' or re.search(r'\bPV modules?\b', txt, re.I):
+    # "N PV modules in series" is a panel-count annotation, not a string slot.
+    # Keep it separate so its count can be updated per-project without
+    # polluting the MPPT port→string-label mapping.
+    if re.search(r'\bPV modules?\b', txt, re.I):
+        return 'panel_count'
+    if STRING_RE.search(txt) or c == 'reserve':
         return 'string_label'
     return 'fixed'
 
@@ -325,6 +318,71 @@ def _place_entity(layout, d, dx, dy, log):
         log(f"  [warn] place {t}: {ex}")
 
 
+def _place_entity_stretched(layout, d, dx, dy, split_y, extra_h, log):
+    """Like _place_entity but shifts any coordinate below split_y further down by extra_h.
+
+    This stretches the inverter box and bottom annotations to cover extrapolated
+    MPPT rows, while leaving all existing MPPT geometry above split_y intact.
+    """
+    if extra_h <= 0:
+        _place_entity(layout, d, dx, dy, log)
+        return
+
+    def _sy(y):
+        return y - extra_h if y < split_y else y
+
+    t = d['type']
+    try:
+        if t == 'LWPOLYLINE':
+            pts = [(p[0] + dx, _sy(p[1]) + dy) + tuple(p[2:]) for p in d['pts']]
+            ne  = layout.add_lwpolyline(pts)
+            ne.closed = d.get('closed', False)
+            if 'const_width' in d:
+                ne.dxf.const_width = d['const_width']
+            _apply_common(ne, d)
+        elif t == 'MTEXT':
+            ne = layout.add_mtext(d['text'],
+                                  dxfattribs=_mtext_attribs(dict(d, y=_sy(d['y'])), dx, dy))
+            _apply_common(ne, d)
+        elif t == 'ARC':
+            ne = layout.add_arc(
+                (d['cx'] + dx, _sy(d['cy']) + dy, d['cz']),
+                d['radius'], d['start_angle'], d['end_angle'])
+            _apply_common(ne, d)
+        elif t == 'CIRCLE':
+            ne = layout.add_circle(
+                (d['cx'] + dx, _sy(d['cy']) + dy, d['cz']), d['radius'])
+            _apply_common(ne, d)
+        elif t == 'LINE':
+            ne = layout.add_line(
+                (d['sx'] + dx, _sy(d['sy']) + dy, d['sz']),
+                (d['ex'] + dx, _sy(d['ey']) + dy, d['ez']))
+            _apply_common(ne, d)
+        elif t == 'ELLIPSE':
+            ne = layout.add_ellipse(
+                center=(d['cx'] + dx, _sy(d['cy']) + dy, d['cz']),
+                major_axis=d['major_axis'], ratio=d['ratio'],
+                start_param=d['start_param'], end_param=d['end_param'])
+            _apply_common(ne, d)
+        elif t == 'INSERT':
+            ne = layout.add_blockref(
+                d['name'], (d['ix'] + dx, _sy(d['iy']) + dy, d['iz']))
+            for a in ('xscale', 'yscale', 'rotation'):
+                try:
+                    if a in d:
+                        setattr(ne.dxf, a, d[a])
+                except Exception:
+                    pass
+            _apply_common(ne, d)
+        elif t == 'POLYLINE':
+            pts = [(p[0] + dx, _sy(p[1]) + dy, p[2]) for p in d['pts3d']]
+            if pts:
+                ne = layout.add_polyline3d(pts)
+                _apply_common(ne, d)
+    except Exception as ex:
+        log(f"  [warn] place_stretched {t}: {ex}")
+
+
 def _place_mtext(layout, d, dx, dy, text, log):
     """Stamp an MTEXT at (dx, dy) offset with a custom text string."""
     try:
@@ -354,7 +412,6 @@ def _generate(cfg, log):
     OUTPUT_PATH  = cfg['output_path']
 
     panel_model       = cfg.get('panel_model', '').strip()
-    panel_power_wp    = float(cfg.get('panel_power_wp') or 0)
     panels_per_string = int(float(cfg.get('panels_per_string') or 0))
     inverter_model    = cfg.get('inverter_model', '').strip()
     dc_power_kwp      = float(cfg.get('dc_power_kwp') or 0)
@@ -375,9 +432,10 @@ def _generate(cfg, log):
     excel = {}
     cur   = None
     for i in range(1, ws.max_row + 1):
-        inv   = ws.cell(row=i, column=1).value
-        sname = ws.cell(row=i, column=3).value
-        mppt  = ws.cell(row=i, column=4).value
+        inv        = ws.cell(row=i, column=1).value
+        sname      = ws.cell(row=i, column=3).value
+        mppt       = ws.cell(row=i, column=4).value
+        module_wp_raw = ws.cell(row=i, column=21).value   # col U "Module type"
         if inv is not None and '.' in str(inv):
             try:
                 t, v = str(inv).split('.')[:2]
@@ -387,7 +445,8 @@ def _generate(cfg, log):
                 pass
         if sname and cur and mppt:
             try:
-                excel[cur][int(float(mppt))].append(str(sname))
+                wp = int(float(module_wp_raw)) if module_wp_raw not in (None, '') else 0
+                excel[cur][int(float(mppt))].append((str(sname), wp))
             except Exception:
                 pass
 
@@ -413,9 +472,27 @@ def _generate(cfg, log):
     doc = _ez.readfile(TEMPLATE_DXF)
     msp = doc.modelspace()
 
+    # Auto-detect the template Y-band by anchoring on the "INVERTER 1.1" title.
+    # This is robust against templates whose MPPT rows fall outside the
+    # hardcoded 159 400 – 168 000 default range.
+    anchor_y = None
+    for _e in msp:
+        if _e.dxftype() == 'MTEXT':
+            if re.search(r'INVERTER\s+1\.1\b', _e.text, re.I) and 'P=' in _e.text:
+                anchor_y = _e.dxf.insert.y
+                break
+    if anchor_y is not None:
+        tmpl_y_min = anchor_y - 10000   # enough room for 16+ MPPT rows below title
+        tmpl_y_max = anchor_y + 5000    # enough room for cabin header above title
+        log(f"Template anchor Y={anchor_y:.0f}  band {tmpl_y_min:.0f}–{tmpl_y_max:.0f}")
+    else:
+        tmpl_y_min, tmpl_y_max = _TMPL_Y_MIN, _TMPL_Y_MAX
+        log(f"[warn] 'INVERTER 1.1' not found; using default band "
+            f"{_TMPL_Y_MIN}–{_TMPL_Y_MAX}")
+
     raw_ents  = [e for e in msp
                  if (y := _ent_y(e)) is not None
-                 and _TMPL_Y_MIN <= y <= _TMPL_Y_MAX]
+                 and tmpl_y_min <= y <= tmpl_y_max]
     log(f"Template band: {len(raw_ents)} entities found")
     all_dicts = [d for e in raw_ents if (d := _extract_entity(e, log)) is not None]
 
@@ -451,6 +528,20 @@ def _generate(cfg, log):
     port_lbl = [(m['x'], m['y'], _strip_mtext_fmt(m['text']))
                 for m in tmpl_texts if PORT_RE.match(_strip_mtext_fmt(m['text']))]
     str_lbl  = [m for m in tmpl_texts if m['cls'] == 'string_label']
+
+    # Diagnostics: log what was found so mismatches can be spotted immediately
+    log(f"  Port labels (N-M format) found: {len(port_lbl)}")
+    if port_lbl:
+        sample = sorted(port_lbl, key=lambda t: t[2])[:6]
+        log(f"    samples: {[t[2] for t in sample]}")
+    else:
+        # Show what MTEXT labels ARE in the template to help identify the format
+        all_plain = [_strip_mtext_fmt(m['text']) for m in tmpl_texts
+                     if m.get('cls') == 'fixed' and len(_strip_mtext_fmt(m['text'])) < 20]
+        log(f"  [diag] No N-M port labels — short fixed labels in template: "
+            f"{all_plain[:20]}")
+    log(f"  String-label slots found: {len(str_lbl)}")
+
     mppt_map = {}
     for px, py, ptxt in port_lbl:
         best, bd = None, _PORT_Y_TOL
@@ -471,7 +562,79 @@ def _generate(cfg, log):
         None)
     if panel_sl and (1, 1) not in mppt_map:
         mppt_map[(1, 1)] = panel_sl
-    log(f"MPPT/port slots: {len(mppt_map)}")
+        log(f"  [diag] No port-label matches; fallback (1,1) slot at Y={panel_sl['y']:.0f}")
+    log(f"MPPT/port slots in template: {len(mppt_map)}")
+
+    # Extrapolate missing MPPT rows when template has fewer rows than Excel.
+    # Also compute stretch parameters used later to enlarge the inverter box.
+    tmpl_mpputs = sorted(set(m for m, _ in mppt_map))
+    excel_mpputs = sorted(set(
+        m for invd in excel.values() for m in invd.keys()))
+    missing = [m for m in excel_mpputs if m not in tmpl_mpputs]
+
+    # Y threshold below which entities are shifted to open room for extra MPPT rows.
+    # float('inf') means no stretching (all entities stay in place).
+    _stretch_split_y = float('inf')
+    _stretch_extra_h = 0.0
+
+    if missing:
+        log(f"[warn] Template missing MPPT slot(s): {missing} — extrapolating positions.")
+        # Collect port-1 Y positions for all existing template MPPTs
+        port1_ys = [(m, mppt_map[(m, 1)]['y'])
+                    for m in tmpl_mpputs if (m, 1) in mppt_map]
+        port1_ys.sort()
+        log(f"  Anchor MPPT rows available for extrapolation: {[m for m, _ in port1_ys]}")
+
+        if not port1_ys:
+            log("[warn] Cannot extrapolate: no port-1 anchor rows in template. "
+                "Check that template port labels match format N-M (e.g. '1-1', '2-1').")
+        else:
+            # Compute average Y-step from consecutive pairs, skip first if anomalous
+            if len(port1_ys) >= 2:
+                # port1_ys is list of tuples (m, y); Y decreases as MPPT increases
+                steps = [port1_ys[i][1] - port1_ys[i + 1][1]
+                         for i in range(len(port1_ys) - 1)]
+                # Exclude first step if it is more than 2× the median of the rest
+                if len(steps) > 1:
+                    rest = sorted(steps[1:])
+                    median_step = rest[len(rest) // 2]
+                    use_steps = steps[1:] if steps[0] > 2 * median_step else steps
+                else:
+                    use_steps = steps
+                avg_step = sum(use_steps) / len(use_steps) if use_steps else 210.0
+            else:
+                avg_step = 210.0
+
+            # Within-MPPT port-1 to port-2 Y offset
+            last_m, last_y1 = port1_ys[-1]
+            if (last_m, 2) in mppt_map:
+                port_inner_offset = mppt_map[(last_m, 2)]['y'] - last_y1
+            else:
+                port_inner_offset = -105  # typical ~half-step offset
+
+            # Stretch threshold: just below the last template MPPT row.
+            # Entities below this (box bottom edge, DC spec text) shift down by extra_h.
+            _stretch_split_y = last_y1 + port_inner_offset - avg_step * 0.5
+            _stretch_extra_h = len(missing) * avg_step
+            log(f"  Box stretch: split_y={_stretch_split_y:.0f}, "
+                f"extra_h={_stretch_extra_h:.0f} ({len(missing)} rows × {avg_step:.0f})")
+
+            # Reference dicts to copy for new rows
+            ref_p1 = mppt_map.get((last_m, 1), str_lbl[-1] if str_lbl else None)
+            ref_p2 = mppt_map.get((last_m, 2), ref_p1)
+
+            if ref_p1:
+                for miss_m in missing:
+                    delta = miss_m - last_m
+                    new_y1 = last_y1 - delta * avg_step
+                    new_y2 = new_y1 + port_inner_offset
+                    mppt_map[(miss_m, 1)] = dict(ref_p1, y=new_y1)
+                    if ref_p2:
+                        mppt_map[(miss_m, 2)] = dict(ref_p2, y=new_y2)
+                log(f"Extrapolated MPPT rows {missing} (avg_step={avg_step:.1f}, "
+                    f"inner_offset={port_inner_offset:.1f})")
+            else:
+                log(f"[warn] No reference row to extrapolate from — MPPTs {missing} skipped.")
 
     # ── 5. Precompute inverter positions ──────────────────────────────────────
     inv_col = {(T, I): idx
@@ -479,29 +642,41 @@ def _generate(cfg, log):
                for idx, I in enumerate(invs)}
     tx_row  = {T: idx for idx, T in enumerate(transformer_list)}
 
+    # Increase row spacing when the inverter section is taller due to extra MPPT rows
+    _eff_row_spacing = int(_ROW_SPACING + _stretch_extra_h)
+
     def inv_offset(T, I):
         return (inv_col[(T, I)] * _COL_SPACING,
-                -tx_row[T] * _ROW_SPACING)
+                -tx_row[T] * _eff_row_spacing)
 
     # ── 6. Label builders ─────────────────────────────────────────────────────
     def make_string_label(T, I, mppt, port):
         lst = excel.get((T, I), {}).get(mppt, [])
         if port - 1 < len(lst):
-            label = f"String {lst[port - 1]}"
+            name, wp = lst[port - 1]
+            label = f"String {name}"
             if panels_per_string > 0:
                 if panel_model:
-                    suffix = f" {panel_power_wp:.0f}Wp" if panel_power_wp > 0 else ""
+                    suffix = f" {wp}Wp" if wp > 0 else ""
                     label += f" - {panels_per_string}× {panel_model}{suffix}"
                 else:
-                    label += f" ({panels_per_string}P)"
+                    suffix = f" {wp}Wp" if wp > 0 else ""
+                    label += f" - {panels_per_string}P{suffix}"
             return label
         return "reserve"
 
     def make_inv_title(T, I):
         dc = dc_power_kwp
-        if dc <= 0 and panels_per_string > 0 and panel_power_wp > 0:
-            n_str = sum(len(v) for v in excel.get((T, I), {}).values())
-            dc = n_str * panels_per_string * panel_power_wp / 1000.0
+        if dc <= 0 and panels_per_string > 0:
+            inv_data = excel.get((T, I), {})
+            total_kwp = sum(
+                panels_per_string * wp / 1000.0
+                for strings in inv_data.values()
+                for _, wp in strings
+                if wp > 0
+            )
+            if total_kwp > 0:
+                dc = total_kwp
         parts = [f"INVERTER {T}.{I}"]
         if inverter_model:
             parts.append(inverter_model)
@@ -536,10 +711,27 @@ def _generate(cfg, log):
         dx, dy = inv_offset(T, I)
         for d in tmpl:
             if d['type'] == 'MTEXT':
-                if d.get('cls') == 'fixed':
-                    _place_entity(msp, d, dx, dy, log)
+                cls = d.get('cls', 'fixed')
+                if cls == 'fixed':
+                    _place_entity_stretched(msp, d, dx, dy,
+                                            _stretch_split_y, _stretch_extra_h, log)
+                elif cls == 'panel_count':
+                    if panels_per_string > 0:
+                        updated = re.sub(
+                            r'\d+(\s*PV modules?)',
+                            lambda m: f'{panels_per_string}{m.group(1)}',
+                            d['text'], flags=re.I)
+                        # Apply Y-stretch in case panel-count annotation is near box bottom
+                        d_s = dict(d, y=(d['y'] - _stretch_extra_h
+                                         if d['y'] < _stretch_split_y else d['y']))
+                        _place_mtext(msp, d_s, dx, dy, updated, log)
+                    else:
+                        _place_entity_stretched(msp, d, dx, dy,
+                                                _stretch_split_y, _stretch_extra_h, log)
+                # title / cabin_label / cabin_header / string_label handled below
             else:
-                _place_entity(msp, d, dx, dy, log)
+                _place_entity_stretched(msp, d, dx, dy,
+                                        _stretch_split_y, _stretch_extra_h, log)
         if td:
             _place_mtext(msp, td,  dx, dy, make_inv_title(T, I), log)
         if chd:
@@ -553,9 +745,11 @@ def _generate(cfg, log):
             log(f"  {idx + 1}/{len(inv_list)} inverters done")
 
     # ── 9. Paper-space layouts  (one per transformer, A3 landscape) ───────────
-    tmpl_height   = _TMPL_Y_MAX - _TMPL_Y_MIN
-    tmpl_y_center = (_TMPL_Y_MIN + _TMPL_Y_MAX) / 2
-    tmpl_x_center = xmin + _COL_STEP / 2
+    # After Y-stretching the inverter box grows by _stretch_extra_h at the bottom.
+    eff_tmpl_y_min  = tmpl_y_min - _stretch_extra_h
+    tmpl_height     = tmpl_y_max - eff_tmpl_y_min
+    tmpl_y_center   = (eff_tmpl_y_min + tmpl_y_max) / 2
+    tmpl_x_center   = xmin + _COL_STEP / 2
 
     log(f"Creating {len(transformer_list)} paper-space layout(s) …")
     for T in transformer_list:
@@ -567,7 +761,7 @@ def _generate(cfg, log):
 
         n_inv  = len(transformers[T])
         row_cx = tmpl_x_center + (n_inv - 1) * _COL_SPACING / 2
-        row_cy = tmpl_y_center - tx_row[T] * _ROW_SPACING
+        row_cy = tmpl_y_center - tx_row[T] * _eff_row_spacing
         row_w  = _COL_SPACING * n_inv
 
         # Scale view so the full transformer row fits on A3 landscape (420×297 mm)
@@ -603,10 +797,6 @@ _DEFAULTS = {
         'Jinko Solar JKM660M-78HL4-V',
         'Trina Solar TSM-670NEG21C.20',
         'REC Alpha Pure-R 430AA',
-    ],
-    'panel_power_wp': [
-        '430', '460', '500', '540', '545',
-        '570', '580', '600', '625', '640', '655', '660',
     ],
     'panels_per_string': ['16', '18', '20', '22', '24', '26', '28', '30'],
     'inverter_model': [
@@ -709,7 +899,6 @@ _history = _HistoryStore(_HISTORY_PATH)
 
 _FIELD_LABELS: dict[str, str] = {
     'panel_model':       'Panel Model',
-    'panel_power_wp':    'Power per Panel (Wp)',
     'panels_per_string': 'Panels per String',
     'inverter_model':    'Inverter Model',
     'dc_power_kwp':      'DC Power (KWp)',
@@ -1060,8 +1249,8 @@ class SLDApp(tk.Tk):
         ttk.Separator(tab).pack(fill='x', pady=12)
 
         hint = (
-            "Template DXF  – source file containing Inverter 1.1 in Y-band 159 400 - 168 000.\n"
-            "Excel File       – must contain sheet '2E802-3' with:\n"
+            "Template DXF  - source file containing Inverter 1.1 in Y-band 159 400 - 168 000.\n"
+            "Excel File       - must contain sheet '2E802-3' with:\n"
             "   Column 1 = Inverter ID (e.g. '1.2')   "
             "Column 3 = String name   Column 4 = MPPT number\n\n"
             "Output DXF is auto-filled to match the Excel file location.\n\n"
@@ -1077,11 +1266,6 @@ class SLDApp(tk.Tk):
         nb.add(tab, text='  Equipment  ')
 
         # Autofill callbacks
-        def _on_panel_model_select(model):
-            """Auto-fill panel power when model is selected."""
-            if model in _PANEL_POWERS:
-                self.f_panel_power.var.set(_PANEL_POWERS[model])
-
         def _on_inverter_model_select(model):
             """Auto-fill DC and AC power when inverter model is selected."""
             if model in _INVERTER_POWERS:
@@ -1093,15 +1277,11 @@ class SLDApp(tk.Tk):
         self._section(tab, "Solar Panel")
         self.f_panel_model = _HistoryCombo(
             tab, "Panel Model:", 'panel_model',
-            refresh_callback=self._refresh_all_combos,
-            on_select=_on_panel_model_select)
+            refresh_callback=self._refresh_all_combos)
         self.f_panel_model.pack(fill='x')
 
-        self.f_panel_power = _HistoryCombo(
-            tab, "Power per Panel:", 'panel_power_wp',
-            default='460', unit='Wp', width=14,
-            refresh_callback=self._refresh_all_combos)
-        self.f_panel_power.pack(fill='x')
+        ttk.Label(tab, text="  Module power (Wp) is read from Excel column U.",
+                  foreground='gray', font=('Segoe UI', 8)).pack(anchor='w', padx=6)
 
         self.f_panels_str = _HistoryCombo(
             tab, "Panels per String:", 'panels_per_string',
@@ -1215,7 +1395,6 @@ class SLDApp(tk.Tk):
             'xlsx_path':         self.fe_xlsx.get(),
             'output_path':       self.fe_out.get(),
             'panel_model':       self.f_panel_model.get(),
-            'panel_power_wp':    self.f_panel_power.get(),
             'panels_per_string': self.f_panels_str.get(),
             'inverter_model':    self.f_inv_model.get(),
             'dc_power_kwp':      self.f_dc_power.get(),
@@ -1240,8 +1419,7 @@ class SLDApp(tk.Tk):
             out_dir = os.path.dirname(cfg['output_path'])
             if out_dir and not os.path.isdir(out_dir):
                 errs.append(f"Output directory does not exist:\n  {out_dir}")
-        for key, label in (('panel_power_wp',    'Panel Power'),
-                           ('panels_per_string', 'Panels per String'),
+        for key, label in (('panels_per_string', 'Panels per String'),
                            ('dc_power_kwp',      'DC Power'),
                            ('ac_power_kwac',     'AC Power'),
                            ('temp_rating',       'Temperature Rating')):
@@ -1259,7 +1437,7 @@ class SLDApp(tk.Tk):
             self.fe_out.var.set(os.path.splitext(xlsx)[0] + '.dxf')
 
     def _refresh_all_combos(self):
-        for combo in (self.f_panel_model, self.f_panel_power, self.f_panels_str,
+        for combo in (self.f_panel_model, self.f_panels_str,
                       self.f_inv_model, self.f_dc_power, self.f_ac_power):
             combo.refresh()
 
@@ -1291,7 +1469,7 @@ class SLDApp(tk.Tk):
         self.progress.stop()
         self.gen_btn.configure(state='normal')
         self.status_var.set("Done — file saved.")
-        for combo in (self.f_panel_model, self.f_panel_power, self.f_panels_str,
+        for combo in (self.f_panel_model, self.f_panels_str,
                       self.f_inv_model, self.f_dc_power, self.f_ac_power):
             combo.record()
         messagebox.showinfo("Success",
