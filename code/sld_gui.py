@@ -11,7 +11,8 @@ import os
 import re
 from collections import defaultdict
 
-_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logoA176LAB.jpg')
+_LOGO_PATH     = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logoA176LAB.jpg')
+_TEMPLATE_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template_data.json')
 
 
 def _load_logo_tk(size=(90, 90)):
@@ -31,6 +32,7 @@ def _load_logo_tk(size=(90, 90)):
 
 def _generate(cfg, log):
     """Run the full SLD generation with a config dict. log(str) sends text to UI."""
+    import json as _json
     try:
         import ezdxf as _ez
     except ImportError:
@@ -40,7 +42,6 @@ def _generate(cfg, log):
     except ImportError:
         raise RuntimeError("openpyxl not installed.  Run:  pip install openpyxl")
 
-    DXF_PATH    = cfg['dxf_path']
     XLSX_PATH   = cfg['xlsx_path']
     OUTPUT_PATH = cfg['output_path']
 
@@ -53,12 +54,8 @@ def _generate(cfg, log):
     temp_rating       = float(cfg.get('temp_rating') or 40)
     transformer_power = cfg.get('transformer_power', '').strip()
 
-    TEMPLATE_Y_MIN = 159_400
-    TEMPLATE_Y_MAX = 168_000
-    COL_STEP       = 11_740
-    ROW_STEP       = 10_200
-    PORT_RE        = re.compile(r'^\d+-\d+$')
-    STRING_RE      = re.compile(r'String \d+\.\d+\.\d+')
+    PORT_RE   = re.compile(r'^\d+-\d+$')
+    STRING_RE = re.compile(r'String \d+\.\d+\.\d+')
 
     # ── 1. Read Excel ─────────────────────────────────────────────────────────
     log("Reading Excel …")
@@ -100,105 +97,17 @@ def _generate(cfg, log):
         log(f"  Tx{T}: {len(ii)} inverters  "
             f"MPPTs {min(mc)}-{max(mc)}  Strings {min(sc)}-{max(sc)}")
 
-    # ── 2. Load template DXF ──────────────────────────────────────────────────
-    log("Loading template DXF …")
-    doc = _ez.readfile(DXF_PATH)
-    msp = doc.modelspace()
+    # ── 2. Load template data from JSON ───────────────────────────────────────
+    log("Loading template data …")
+    with open(_TEMPLATE_JSON, encoding='utf-8') as f:
+        tdata = _json.load(f)
 
-    def entity_y(e):
-        try:
-            t = e.dxftype()
-            if t in ('TEXT', 'MTEXT', 'INSERT'):  return e.dxf.insert.y
-            if t in ('ARC', 'CIRCLE', 'ELLIPSE'): return e.dxf.center.y
-            if t == 'LINE':                       return e.dxf.start.y
-            if t == 'LWPOLYLINE':
-                pts = list(e.get_points())
-                return pts[0][1] if pts else None
-            if t == 'POLYLINE':
-                vs = list(e.vertices)
-                return vs[0].dxf.location.y if vs else None
-        except Exception:
-            pass
-        return None
-
-    tmpl_live = [e for e in msp
-                 if (y := entity_y(e)) is not None
-                 and TEMPLATE_Y_MIN <= y <= TEMPLATE_Y_MAX]
-    log(f"Template entities found: {len(tmpl_live)}")
-
-    # ── 3. Extract entity data ────────────────────────────────────────────────
-    def common_attrs(e):
-        d = {}
-        for a in ('layer', 'color', 'linetype', 'lineweight', 'ltscale'):
-            try:
-                if e.dxf.hasattr(a):
-                    d[a] = getattr(e.dxf, a)
-            except Exception:
-                pass
-        return d
-
-    def extract(e):
-        t = e.dxftype()
-        d = {'type': t}
-        d.update(common_attrs(e))
-        try:
-            if t == 'LWPOLYLINE':
-                d['pts']    = list(e.get_points())
-                d['closed'] = e.closed
-                if e.dxf.hasattr('const_width'):
-                    d['const_width'] = e.dxf.const_width
-            elif t == 'MTEXT':
-                pos = e.dxf.insert
-                d['x'] = pos.x
-                d['y'] = pos.y
-                d['text'] = e.text
-                for a in ('char_height', 'width', 'attachment_point', 'flow_direction',
-                          'line_spacing_style', 'line_spacing_factor', 'style'):
-                    try:
-                        if e.dxf.hasattr(a):
-                            d[a] = getattr(e.dxf, a)
-                    except Exception:
-                        pass
-            elif t == 'ARC':
-                c = e.dxf.center
-                d.update({'cx': c.x, 'cy': c.y, 'cz': c.z,
-                          'radius': e.dxf.radius,
-                          'start_angle': e.dxf.start_angle,
-                          'end_angle': e.dxf.end_angle})
-            elif t == 'CIRCLE':
-                c = e.dxf.center
-                d.update({'cx': c.x, 'cy': c.y, 'cz': c.z, 'radius': e.dxf.radius})
-            elif t == 'LINE':
-                s, en = e.dxf.start, e.dxf.end
-                d.update({'sx': s.x, 'sy': s.y, 'sz': s.z,
-                          'ex': en.x, 'ey': en.y, 'ez': en.z})
-            elif t == 'ELLIPSE':
-                c, ma = e.dxf.center, e.dxf.major_axis
-                d.update({'cx': c.x, 'cy': c.y, 'cz': c.z,
-                          'major_axis': (ma.x, ma.y, ma.z),
-                          'ratio': e.dxf.ratio,
-                          'start_param': e.dxf.start_param,
-                          'end_param': e.dxf.end_param})
-            elif t == 'INSERT':
-                ins = e.dxf.insert
-                d.update({'name': e.dxf.name,
-                          'ix': ins.x, 'iy': ins.y,
-                          'iz': ins.z if hasattr(ins, 'z') else 0})
-                for a in ('xscale', 'yscale', 'rotation'):
-                    try:
-                        if e.dxf.hasattr(a):
-                            d[a] = getattr(e.dxf, a)
-                    except Exception:
-                        pass
-            elif t == 'POLYLINE':
-                pts3d = [v.dxf.location for v in e.vertices]
-                d['pts3d'] = [(p.x, p.y, p.z) for p in pts3d]
-            else:
-                return None
-        except Exception as ex:
-            log(f"  [warn] extract {t}: {ex}")
-            return None
-        return d
+    meta           = tdata['meta']
+    TEMPLATE_Y_MIN = meta['template_y_min']
+    TEMPLATE_Y_MAX = meta['template_y_max']
+    COL_STEP       = meta['col_step']
+    ROW_STEP       = meta['row_step']
+    xmin           = meta['xmin']
 
     def min_x(d):
         t = d['type']
@@ -213,11 +122,9 @@ def _generate(cfg, log):
             pass
         return 0
 
-    raw   = [d for e in tmpl_live if (d := extract(e)) is not None]
-    xmin  = min((min_x(d) for d in raw), default=0)
-    xcut  = xmin + COL_STEP
-    tmpl  = [d for d in raw if min_x(d) <= xcut]
-    log(f"Kept {len(tmpl)}/{len(raw)} entities (x_min={xmin:.0f})")
+    xcut = xmin + COL_STEP
+    tmpl = [d for d in tdata['entities'] if min_x(d) <= xcut]
+    log(f"Template: {len(tmpl)}/{len(tdata['entities'])} entities loaded")
 
     # ── 4. Classify MTEXT ─────────────────────────────────────────────────────
     def classify(txt):
@@ -376,13 +283,27 @@ def _generate(cfg, log):
         except Exception as ex:
             log(f"  [warn] place_mtext: {ex}")
 
-    # ── 8. Clear model space ──────────────────────────────────────────────────
-    log("Clearing model space …")
-    for e in list(msp):
+    # ── 8. Create blank output DXF, register linetypes and block definitions ──
+    log("Creating output DXF …")
+    doc = _ez.new('R2010')
+    msp = doc.modelspace()
+
+    # Register custom linetypes so entities that reference them are valid
+    for lt_name, lt_def in tdata.get('linetypes', {}).items():
+        pat = [v for v in lt_def['pattern'] if abs(v) > 1e-10 or v == 0.0]
+        # drop trailing zero (floating-point noise from simplified_line_pattern)
+        while pat and pat[-1] == 0.0:
+            pat.pop()
         try:
-            msp.delete_entity(e)
+            doc.linetypes.add(lt_name, pattern=pat,
+                              description=lt_def.get('description', ''))
         except Exception:
             pass
+
+    for bname, bentities in tdata['blocks'].items():
+        blk = doc.blocks.new(name=bname)
+        for bd in bentities:
+            place(blk, bd, 0, 0)
 
     # ── 9. Generate all inverter sections ─────────────────────────────────────
     td  = next((m for m in tmpl_texts if m['cls'] == 'title'),        None)
@@ -409,60 +330,7 @@ def _generate(cfg, log):
         if (idx + 1) % 10 == 0 or (idx + 1) == len(inv_list):
             log(f"  {idx + 1}/{len(inv_list)} inverters done")
 
-    # ── 10. Paper space layouts ───────────────────────────────────────────────
-    log("Creating paper space layouts …")
-    for lname in [l.name for l in doc.layouts if l.name != 'Model']:
-        try:
-            doc.layouts.delete(lname)
-        except Exception:
-            pass
-
-    TMPL_H  = TEMPLATE_Y_MAX - TEMPLATE_Y_MIN
-    TMPL_XC = xmin + COL_STEP / 2
-    TMPL_YC = (TEMPLATE_Y_MIN + TEMPLATE_Y_MAX) / 2
-
-    for T in transformer_list:
-        try:
-            layout = doc.layouts.new(f"Tx{T}")
-        except Exception:
-            layout = doc.layouts.get(f"Tx{T}")
-        n   = len(transformers[T])
-        cx  = TMPL_XC + (n - 1) * COL_STEP / 2
-        cy  = TMPL_YC - transformer_list.index(T) * ROW_STEP
-        w   = COL_STEP * n
-        vh  = max(TMPL_H * 1.05, w / (420.0 / 297.0) * 1.05)
-        layout.add_viewport(center=(210, 148.5), size=(420, 297),
-                            view_center_point=(cx, cy), view_height=vh)
-
-    log(f"Layouts: {', '.join(f'Tx{T}' for T in transformer_list)}")
-
-    # ── 10b. Logo in each paper-space layout ──────────────────────────────────
-    if os.path.isfile(_LOGO_PATH):
-        try:
-            try:
-                from PIL import Image as _PIL
-                with _PIL.open(_LOGO_PATH) as _im:
-                    px_w, px_h = _im.size
-            except Exception:
-                px_w, px_h = 400, 400
-            img_def   = doc.add_image_def(filename=_LOGO_PATH, size_in_pixel=(px_w, px_h))
-            logo_mm   = 28.0
-            margin_mm = 5.0
-            ins_x = 420.0 - margin_mm - logo_mm
-            ins_y = 297.0 - margin_mm - logo_mm
-            for T in transformer_list:
-                doc.layouts.get(f"Tx{T}").add_image(
-                    img_def,
-                    insert=(ins_x, ins_y),
-                    size_in_units=(logo_mm, logo_mm),
-                    rotation=0,
-                    dxfattribs={'layer': '0'},
-                )
-            log(f"Logo embedded in {len(transformer_list)} paper-space layout(s).")
-        except Exception as ex:
-            log(f"  [warn] logo not added to DXF: {ex}")
-
-    # ── 11. Save ──────────────────────────────────────────────────────────────
+    # ── 10. Save ──────────────────────────────────────────────────────────────
     log(f"Saving → {OUTPUT_PATH}")
     doc.saveas(OUTPUT_PATH)
     log("Done!  SLD generated successfully.")
@@ -473,8 +341,6 @@ def _generate(cfg, log):
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PAD = {'padx': 6, 'pady': 3}
-
-DEFAULT_DXF = r'C:/Users/user/Desktop/SLD Diagram/YANEL/26S001_2E103 - DC Single Line Diagram.dxf'
 
 
 class _FileRow(ttk.Frame):
@@ -596,11 +462,6 @@ class SLDApp(tk.Tk):
         ttk.Label(tab, text="File Paths",
                   font=('Segoe UI', 11, 'bold')).pack(anchor='w', pady=(0, 10))
 
-        self.fe_dxf = _FileRow(
-            tab, "Template DXF:", DEFAULT_DXF,
-            filetypes=[('DXF files', '*.dxf'), ('All files', '*.*')])
-        self.fe_dxf.pack(fill='x', pady=2)
-
         self.fe_xlsx = _FileRow(
             tab, "Excel Cable List:",
             filetypes=[('Excel files', '*.xlsx *.xls'), ('All files', '*.*')])
@@ -615,11 +476,10 @@ class SLDApp(tk.Tk):
         ttk.Separator(tab).pack(fill='x', pady=12)
 
         hint = (
-            "Template DXF  – source file containing Inverter 1.1 as the stamping template "
-            "(Y band 159 400 – 168 000).\n\n"
             "Excel File  – must contain sheet '2E802-3' with:\n"
             "   Column 1 = Inverter ID (e.g. '1.2')   "
             "Column 3 = String name   Column 4 = MPPT number\n\n"
+            "Output DXF is auto-filled to match the Excel file location.\n\n"
             "Press F5 or switch to the Generate tab to run."
         )
         ttk.Label(tab, text=hint, foreground='gray',
@@ -736,7 +596,6 @@ class SLDApp(tk.Tk):
 
     def _collect(self):
         return {
-            'dxf_path':          self.fe_dxf.get(),
             'xlsx_path':         self.fe_xlsx.get(),
             'output_path':       self.fe_out.get(),
             'panel_model':       self.f_panel_model.get(),
@@ -751,10 +610,10 @@ class SLDApp(tk.Tk):
 
     def _validate(self, cfg):
         errs = []
-        if not cfg['dxf_path']:
-            errs.append("Template DXF path is required.")
-        elif not os.path.isfile(cfg['dxf_path']):
-            errs.append(f"Template DXF not found:\n  {cfg['dxf_path']}")
+        if not os.path.isfile(_TEMPLATE_JSON):
+            errs.append(
+                f"Template data not found:\n  {_TEMPLATE_JSON}\n\n"
+                "Run  code/extract_template.py  once to generate it.")
         if not cfg['xlsx_path']:
             errs.append("Excel file path is required.")
         elif not os.path.isfile(cfg['xlsx_path']):
