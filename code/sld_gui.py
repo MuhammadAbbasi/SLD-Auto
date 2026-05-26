@@ -976,6 +976,7 @@ class SLDApp(tk.Tk):
 
         self.fe_tmpl = _FileRow(
             tab, "Template DXF:",
+            default=r'\\S01\2 privato\2025.019 - Eaton Socon\01 - MAT LAV\templete_file_per_sld_tool.dxf',
             filetypes=[('DXF files', '*.dxf'), ('All files', '*.*')])
         self.fe_tmpl.pack(fill='x', pady=2)
 
