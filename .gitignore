@@ -61,3 +61,18 @@ $RECYCLE.BIN/
 *.tmp
 *.bak
 *.swp
+
+# ── General Data & Drawings (Confidential/large files) ────────────────────────
+*.xlsx
+*.xls
+*.dxf
+*.dwg
+
+# ── Local history ─────────────────────────────────────────────────────────────
+code/history_v2.json
+
+# ── Development & nested/external projects ────────────────────────────────────
+Bellomo/
+Easy-MCP-AutoCad/
+demo/
+

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-sld_gui_v2.py  -  Upgraded GUI front-end and CAD engine for the DC Single Line Diagram generator.
-Run:  python sld_gui_v2.py
+sld_gui_v4.py  -  Upgraded GUI front-end and CAD engine for the DC Single Line Diagram generator.
+Template-free generation version.
+Run:  python sld_gui_v4.py
 """
 
 import tkinter as tk
@@ -15,6 +16,7 @@ from collections import defaultdict
 from datetime import datetime
 
 _LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logoA176LAB.jpg')
+_TEMPLATE_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template_data.json')
 
 
 def _load_logo_tk(size=(90, 90)):
@@ -100,21 +102,6 @@ def _strip_mtext_fmt(txt):
     return re.sub(r'\{[^}]*\}', '', txt).strip()
 
 
-def _ent_y(e):
-    """Return a representative Y coordinate for an entity, or None."""
-    try:
-        t = e.dxftype()
-        if t in ('TEXT', 'MTEXT', 'INSERT'):  return e.dxf.insert.y
-        if t in ('ARC', 'CIRCLE', 'ELLIPSE'): return e.dxf.center.y
-        if t == 'LINE':                        return e.dxf.start.y
-        if t == 'LWPOLYLINE':
-            pts = list(e.get_points())
-            return pts[0][1] if pts else None
-    except Exception:
-        pass
-    return None
-
-
 def _ent_y_dict(d):
     """Return a representative Y coordinate for a dictionary entity representation."""
     t = d['type']
@@ -157,80 +144,6 @@ def _is_cable_line(d, sl_y):
         is_near_y = abs(ys[0] - sl_y) < 80
         return is_horiz and is_near_y and length > 200
     return False
-
-
-def _common_attrs(e):
-    d = {}
-    for a in ('layer', 'color', 'linetype', 'lineweight', 'ltscale'):
-        try:
-            if e.dxf.hasattr(a):
-                d[a] = getattr(e.dxf, a)
-        except Exception:
-            pass
-    return d
-
-
-def _extract_entity(e, log):
-    """Return a plain dict with all drawing data, or None for unsupported types."""
-    t = e.dxftype()
-    d = {'type': t}
-    d.update(_common_attrs(e))
-    try:
-        if t == 'LWPOLYLINE':
-            d['pts']    = [list(p) for p in e.get_points()]
-            d['closed'] = e.closed
-            if e.dxf.hasattr('const_width'):
-                d['const_width'] = e.dxf.const_width
-        elif t == 'MTEXT':
-            pos = e.dxf.insert
-            d.update({'x': pos.x, 'y': pos.y, 'text': e.text})
-            for a in ('char_height', 'width', 'attachment_point', 'flow_direction',
-                      'line_spacing_style', 'line_spacing_factor', 'style'):
-                try:
-                    if e.dxf.hasattr(a):
-                        d[a] = getattr(e.dxf, a)
-                except Exception:
-                    pass
-        elif t == 'ARC':
-            c = e.dxf.center
-            d.update({'cx': c.x, 'cy': c.y, 'cz': c.z,
-                      'radius': e.dxf.radius,
-                      'start_angle': e.dxf.start_angle,
-                      'end_angle':   e.dxf.end_angle})
-        elif t == 'CIRCLE':
-            c = e.dxf.center
-            d.update({'cx': c.x, 'cy': c.y, 'cz': c.z, 'radius': e.dxf.radius})
-        elif t == 'LINE':
-            s, en = e.dxf.start, e.dxf.end
-            d.update({'sx': s.x, 'sy': s.y, 'sz': s.z,
-                      'ex': en.x, 'ey': en.y, 'ez': en.z})
-        elif t == 'ELLIPSE':
-            c, ma = e.dxf.center, e.dxf.major_axis
-            d.update({'cx': c.x, 'cy': c.y, 'cz': c.z,
-                      'major_axis': [ma.x, ma.y, ma.z],
-                      'ratio': e.dxf.ratio,
-                      'start_param': e.dxf.start_param,
-                      'end_param':   e.dxf.end_param})
-        elif t == 'INSERT':
-            ins = e.dxf.insert
-            d.update({'name': e.dxf.name,
-                      'ix': ins.x, 'iy': ins.y,
-                      'iz': ins.z if hasattr(ins, 'z') else 0.0})
-            for a in ('xscale', 'yscale', 'rotation'):
-                try:
-                    if e.dxf.hasattr(a):
-                        d[a] = getattr(e.dxf, a)
-                except Exception:
-                    pass
-        elif t == 'POLYLINE':
-            d['pts3d'] = [[v.dxf.location.x, v.dxf.location.y, v.dxf.location.z]
-                          for v in e.vertices]
-        else:
-            return None
-    except Exception as ex:
-        log(f"  [warn] extract {t}: {ex}")
-        return None
-    return d
 
 
 def _entity_min_x(d):
@@ -352,7 +265,7 @@ def _place_entity_stretched(layout, d, dx, dy, split_y, extra_h, log):
     This stretches the inverter box and bottom annotations to cover extrapolated
     MPPT rows, while leaving all existing MPPT geometry above split_y intact.
     """
-    if extra_h <= 0:
+    if extra_h == 0:
         _place_entity(layout, d, dx, dy, log)
         return
 
@@ -421,6 +334,52 @@ def _place_mtext(layout, d, dx, dy, text, log):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  REGISTRATION - DYNAMIC LAYOUT GENERATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _register_layers(doc, entities, blocks, log):
+    layers = set()
+    for d in entities:
+        if 'layer' in d:
+            layers.add(d['layer'])
+    for blk_ents in blocks.values():
+        for d in blk_ents:
+            if 'layer' in d:
+                layers.add(d['layer'])
+    for ly in sorted(layers):
+        if ly not in doc.layers:
+            try:
+                doc.layers.new(ly)
+            except Exception:
+                pass
+
+
+def _register_linetypes(doc, linetypes, log):
+    for name, lt in linetypes.items():
+        if name not in doc.linetypes:
+            try:
+                doc.linetypes.new(name, dxfattribs={
+                    'description': lt.get('description', ''),
+                    'pattern': lt.get('pattern', [])
+                })
+                log(f"  Registered linetype: '{name}'")
+            except Exception as ex:
+                log(f"  [warn] Failed to register linetype '{name}': {ex}")
+
+
+def _register_blocks(doc, blocks, log):
+    for name, entities in blocks.items():
+        if name not in doc.blocks:
+            try:
+                blk = doc.blocks.new(name)
+                for d in entities:
+                    _place_entity(blk, d, 0, 0, log)
+                log(f"  Registered block definition: '{name}' ({len(entities)} entities)")
+            except Exception as ex:
+                log(f"  [warn] Failed to register block '{name}': {ex}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  GENERATION CORE
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -435,7 +394,6 @@ def _generate(cfg, log):
     except ImportError:
         raise RuntimeError("openpyxl not installed.  Run:  pip install openpyxl")
 
-    TEMPLATE_DXF = cfg['template_dxf']
     XLSX_PATH    = cfg['xlsx_path']
     OUTPUT_PATH  = cfg['output_path']
 
@@ -447,6 +405,15 @@ def _generate(cfg, log):
     temp_rating       = float(cfg.get('temp_rating') or 40)
     transformer_power = cfg.get('transformer_power', '').strip()
     show_cable_info   = cfg.get('show_cable_info', False)
+    
+    max_mppts_raw = str(cfg.get('max_mppts', 'Auto')).strip()
+    if max_mppts_raw.lower() == 'auto':
+        max_mppts = None
+    else:
+        try:
+            max_mppts = int(float(max_mppts_raw))
+        except ValueError:
+            max_mppts = 16
 
     # Workspace parameters
     col_spacing       = float(cfg.get('col_spacing') or _COL_SPACING_DEFAULT)
@@ -473,7 +440,6 @@ def _generate(cfg, log):
     if its_sheet_name:
         log(f"Loading string routing data from sheet '{its_sheet_name}'...")
         ws_its = wb[its_sheet_name]
-        # Col 1: To (string ID), Col 2: Cable length +, Col 3: Cable length -, Col 5: Table #
         for r in range(2, ws_its.max_row + 1):
             s_id = ws_its.cell(r, 1).value
             l_p = ws_its.cell(r, 2).value
@@ -506,7 +472,7 @@ def _generate(cfg, log):
     excel = {}
     cur = None
 
-    # Dynamic column mapping based on header detection (usually in row 30)
+    # Dynamic column mapping based on header detection
     col_inverter = 1
     col_str_name = 3
     col_mppt = 4
@@ -609,12 +575,37 @@ def _generate(cfg, log):
         log(f"  Tx{T}: {len(ii)} inverters  "
             f"MPPTs {min(mc)}-{max(mc)}  Strings {min(sc)}-{max(sc)}")
 
-    # ── 2. Load template DXF and extract template-band entities ──────────────
-    log("Loading template DXF ...")
-    doc = _ez.readfile(TEMPLATE_DXF)
+    # ── 2. Create blank new DXF & load embedded JSON template data ────────────
+    log("Creating output DXF from scratch...")
+    doc = _ez.new('R2010')
     msp = doc.modelspace()
 
-    # Ensure custom linetype is defined in doc
+    log(f"Loading embedded template data from {os.path.basename(_TEMPLATE_DATA_PATH)}...")
+    if not os.path.isfile(_TEMPLATE_DATA_PATH):
+        raise FileNotFoundError(f"Template data JSON file not found at: {_TEMPLATE_DATA_PATH}")
+
+    with open(_TEMPLATE_DATA_PATH, encoding='utf-8') as f:
+        tmpl_data = json.load(f)
+
+    all_dicts = tmpl_data['entities']
+    blocks = tmpl_data['blocks']
+    linetypes = tmpl_data['linetypes']
+    xmin = tmpl_data['meta']['xmin']
+    col_step_tmpl = tmpl_data['meta'].get('col_step') or _COL_STEP
+
+    # Register linetypes, layers, and blocks in the new document
+    _register_layers(doc, all_dicts, blocks, log)
+    _register_linetypes(doc, linetypes, log)
+    _register_blocks(doc, blocks, log)
+
+    # Ensure proper TrueType fonts (Arial) are mapped for standard styles
+    for name in ['Standard', 'SIMPLEX', 'Legend']:
+        if name in doc.styles:
+            doc.styles.get(name).dxf.font = 'arial.ttf'
+        else:
+            doc.styles.new(name, dxfattribs={'font': 'arial.ttf'})
+
+    # Ensure custom configured linetype is defined
     if heavy_linetype not in doc.linetypes:
         try:
             doc.linetypes.new(heavy_linetype, dxfattribs={
@@ -625,7 +616,7 @@ def _generate(cfg, log):
         except Exception as ex:
             log(f"  [warn] Could not define linetype '{heavy_linetype}': {ex}")
 
-    # Ensure custom layer is defined
+    # Ensure custom configured layer is defined
     if heavy_layer not in doc.layers:
         try:
             doc.layers.new(heavy_layer, dxfattribs={'color': heavy_color, 'linetype': heavy_linetype})
@@ -633,48 +624,30 @@ def _generate(cfg, log):
         except Exception as ex:
             log(f"  [warn] Could not define layer '{heavy_layer}': {ex}")
 
-    # Auto-detect the template Y-band by anchoring on the "INVERTER 1.1" title.
+    # Find the title anchor Y-level inside the JSON template
     anchor_y = None
-    for _e in msp:
-        if _e.dxftype() == 'MTEXT':
-            if re.search(r'INVERTER\s+1\.1\b', _e.text, re.I) and 'P=' in _e.text:
-                anchor_y = _e.dxf.insert.y
+    for d in all_dicts:
+        if d['type'] == 'MTEXT':
+            if re.search(r'INVERTER\s+1\.1\b', d['text'], re.I) and 'P=' in d['text']:
+                anchor_y = d['y']
                 break
+
     if anchor_y is not None:
         tmpl_y_min = anchor_y - 10000
         tmpl_y_max = anchor_y + 5000
-        log(f"Template anchor Y={anchor_y:.0f}  band {tmpl_y_min:.0f}-{tmpl_y_max:.0f}")
+        log(f"Template JSON anchor Y={anchor_y:.0f}  band {tmpl_y_min:.0f}-{tmpl_y_max:.0f}")
     else:
-        tmpl_y_min, tmpl_y_max = _TMPL_Y_MIN, _TMPL_Y_MAX
-        log(f"[warn] 'INVERTER 1.1' not found; using default Y-band {_TMPL_Y_MIN}-{_TMPL_Y_MAX}")
+        tmpl_y_min = tmpl_data['meta']['template_y_min']
+        tmpl_y_max = tmpl_data['meta']['template_y_max']
+        log(f"[warn] Title 'INVERTER 1.1' not found in JSON; using meta Y-band {tmpl_y_min:.0f}-{tmpl_y_max:.0f}")
 
-    raw_ents  = [e for e in msp
-                 if (y := _ent_y(e)) is not None
-                 and tmpl_y_min <= y <= tmpl_y_max]
-    log(f"Template band: {len(raw_ents)} entities found")
-    all_dicts = [d for e in raw_ents if (d := _extract_entity(e, log)) is not None]
-
-    # Left edge of template in model space
-    xs = []
-    for d in all_dicts:
-        t = d['type']
-        try:
-            if t == 'LWPOLYLINE': xs += [p[0] for p in d['pts']]
-            elif t == 'MTEXT':    xs.append(d['x'])
-            elif t in ('ARC', 'CIRCLE', 'ELLIPSE'): xs.append(d['cx'])
-            elif t == 'LINE':     xs += [d['sx'], d['ex']]
-            elif t == 'INSERT':   xs.append(d['ix'])
-            elif t == 'POLYLINE': xs += [p[0] for p in d['pts3d']]
-        except Exception:
-            pass
-    xmin = min(xs) if xs else 0
-    xcut = xmin + _COL_STEP
-
+    # Filter out entities to get the clean single-inverter slice template
+    xcut = xmin + col_step_tmpl
     tmpl = [d for d in all_dicts
             if _entity_min_x(d) <= xcut and not _is_placeholder_rect(d)]
-    log(f"Template: {len(tmpl)}/{len(all_dicts)} entities in column slice")
+    log(f"Template: {len(tmpl)}/{len(all_dicts)} entities extracted from JSON")
 
-    # ── 3. Classify MTEXT entities ────────────────────────────────────────────
+    # ── 3. Classify template MTEXT entities ───────────────────────────────────
     tmpl_texts = []
     for d in tmpl:
         if d['type'] == 'MTEXT':
@@ -699,7 +672,7 @@ def _generate(cfg, log):
             if m2:
                 mppt_map[(int(m2.group(1)), int(m2.group(2)))] = best
 
-    # Any string_label not within _PORT_Y_TOL of any port → fallback for slot 1-1
+    # Fallback for slot 1-1
     panel_sl = next(
         (sl for sl in str_lbl
          if not any(abs(sl['y'] - py) < _PORT_Y_TOL for _, py, _ in port_lbl)),
@@ -709,49 +682,73 @@ def _generate(cfg, log):
 
     log(f"MPPT/port slots in template: {len(mppt_map)}")
 
-    # Extrapolate missing MPPT rows when template has fewer rows than Excel.
+    # Extrapolate missing MPPT rows or shrink for removed ones
     tmpl_mpputs = sorted(set(m for m, _ in mppt_map))
+    max_tmpl_m = max(tmpl_mpputs) if tmpl_mpputs else 16
     excel_mpputs = sorted(set(m for invd in excel.values() for m in invd.keys()))
-    missing = [m for m in excel_mpputs if m not in tmpl_mpputs]
+    if max_mppts is None:
+        if excel_mpputs:
+            max_mppts = max(excel_mpputs)
+            log(f"Auto-detected maximum MPPT channel from Excel: {max_mppts}")
+        else:
+            max_mppts = 16
+            log(f"No MPPT channels found in Excel. Defaulting to 16.")
+
+    # Grid steps calculation
+    port1_ys = [(m, mppt_map[(m, 1)]['y']) for m in tmpl_mpputs if (m, 1) in mppt_map]
+    port1_ys.sort()
+    if port1_ys:
+        if len(port1_ys) >= 2:
+            steps = [port1_ys[i][1] - port1_ys[i + 1][1] for i in range(len(port1_ys) - 1)]
+            if len(steps) > 1:
+                rest = sorted(steps[1:])
+                median_step = rest[len(rest) // 2]
+                use_steps = steps[1:] if steps[0] > 2 * median_step else steps
+            else:
+                use_steps = steps
+            avg_step = sum(use_steps) / len(use_steps) if use_steps else 210.0
+        else:
+            avg_step = 210.0
+    else:
+        avg_step = 210.0
+
     proto_ents = []
     proto_last_m = None
     proto_last_y1 = None
     proto_last_y2 = None
-
+    
     _stretch_split_y = float('inf')
     _stretch_extra_h = 0.0
+    missing = []
+    removed = []
+    
+    if max_mppts > max_tmpl_m:
+        missing = list(range(max_tmpl_m + 1, max_mppts + 1))
+        _stretch_extra_h = len(missing) * avg_step
+        last_m = max_tmpl_m
+    elif max_mppts < max_tmpl_m:
+        removed = list(range(max_mppts + 1, max_tmpl_m + 1))
+        _stretch_extra_h = -len(removed) * avg_step
+        last_m = max_mppts
+    else:
+        last_m = max_tmpl_m
 
-    if missing:
-        log(f"[warn] Template missing MPPT slot(s): {missing} - extrapolating positions.")
-        port1_ys = [(m, mppt_map[(m, 1)]['y']) for m in tmpl_mpputs if (m, 1) in mppt_map]
-        port1_ys.sort()
+    if port1_ys and last_m in mppt_map:
+        last_y1 = mppt_map[(last_m, 1)]['y']
+        last_y2 = mppt_map[(last_m, 2)]['y'] if (last_m, 2) in mppt_map else last_y1
+        
+        if (last_m, 2) in mppt_map:
+            port_inner_offset = mppt_map[(last_m, 2)]['y'] - last_y1
+        else:
+            port_inner_offset = -105
 
-        if port1_ys:
-            if len(port1_ys) >= 2:
-                steps = [port1_ys[i][1] - port1_ys[i + 1][1] for i in range(len(port1_ys) - 1)]
-                if len(steps) > 1:
-                    rest = sorted(steps[1:])
-                    median_step = rest[len(rest) // 2]
-                    use_steps = steps[1:] if steps[0] > 2 * median_step else steps
-                else:
-                    use_steps = steps
-                avg_step = sum(use_steps) / len(use_steps) if use_steps else 210.0
-            else:
-                avg_step = 210.0
-
-            last_m, last_y1 = port1_ys[-1]
-            if (last_m, 2) in mppt_map:
-                port_inner_offset = mppt_map[(last_m, 2)]['y'] - last_y1
-            else:
-                port_inner_offset = -105
-
-            _stretch_split_y = last_y1 + port_inner_offset - avg_step * 0.5
-            _stretch_extra_h = len(missing) * avg_step
-            log(f"  Stretching inverter box: split_y={_stretch_split_y:.0f}, extra_h={_stretch_extra_h:.0f}")
-
+        _stretch_split_y = min(last_y1, last_y2) - avg_step * 0.5
+        
+        if missing:
+            log(f"Template missing MPPT slot(s): {missing} - extrapolating positions.")
             ref_p1 = mppt_map.get((last_m, 1), str_lbl[-1] if str_lbl else None)
             ref_p2 = mppt_map.get((last_m, 2), ref_p1)
-
+            
             if ref_p1:
                 for miss_m in missing:
                     delta = miss_m - last_m
@@ -762,18 +759,16 @@ def _generate(cfg, log):
                         mppt_map[(miss_m, 2)] = dict(ref_p2, y=new_y2)
                 log(f"Extrapolated MPPT rows {missing}")
                 
-                # Collect prototype row entities (from the last MPPT row) to replicate for missing ones
+                # Collect prototype row entities to replicate
                 proto_last_m = last_m
                 proto_last_y1 = last_y1
-                proto_last_y2 = mppt_map[(last_m, 2)]['y'] if (last_m, 2) in mppt_map else last_y1
+                proto_last_y2 = last_y2
                 ymin_proto = min(proto_last_y1, proto_last_y2) - avg_step * 0.4
                 ymax_proto = max(proto_last_y1, proto_last_y2) + avg_step * 0.4
                 
                 for d in tmpl:
-                    # Exclude the string label itself since we place it separately
                     if d['type'] == 'MTEXT' and d.get('cls') == 'string_label':
                         continue
-                    # Exclude long vertical lines/polylines (like the inverter outline box)
                     if d['type'] == 'LINE':
                         if abs(d['sy'] - d['ey']) > avg_step * 1.5:
                             continue
@@ -785,6 +780,8 @@ def _generate(cfg, log):
                     ey = _ent_y_dict(d)
                     if ey is not None and ymin_proto <= ey <= ymax_proto:
                         proto_ents.append(d)
+        elif removed:
+            log(f"Template has extra MPPT slot(s): {removed} - removing rows and shrinking inverter height.")
 
     # ── 5. Precompute inverter positions ──────────────────────────────────────
     inv_col = {(T, I): idx for T, invs in transformers.items() for idx, I in enumerate(invs)}
@@ -841,9 +838,7 @@ def _generate(cfg, log):
     def make_cabin_hdr(T):
         return f"CABIN {T}\n{transformer_power}" if transformer_power else f"CABIN {T}"
 
-    # ── 7. Clear modelspace and existing paper-space layouts ──────────────────
-    log("Preparing output DXF ...")
-    msp.delete_all_entities()
+    # ── 7. Delete default paper-space layouts ─────────────────────────────────
     paper_layouts = [l.name for l in doc.layouts if not l.is_modelspace]
     for name in paper_layouts:
         try:
@@ -862,24 +857,64 @@ def _generate(cfg, log):
         
         # Stamp background geometry & static annotations
         for tmpl_idx, d in enumerate(tmpl):
+            # If we are shrinking, discard any template entities that fall within the removed MPPT rows
+            if removed and port1_ys:
+                ey = _ent_y_dict(d)
+                if ey is not None:
+                    orig_last_m, orig_last_y1 = port1_ys[-1]
+                    orig_last_y2 = mppt_map[(orig_last_m, 2)]['y'] if (orig_last_m, 2) in mppt_map else orig_last_y1
+                    lower_limit = min(orig_last_y1, orig_last_y2) - avg_step * 0.5
+                    
+                    last_m_temp = max_mppts
+                    last_y1_temp = mppt_map[(last_m_temp, 1)]['y']
+                    last_y2_temp = mppt_map[(last_m_temp, 2)]['y'] if (last_m_temp, 2) in mppt_map else last_y1_temp
+                    upper_limit = min(last_y1_temp, last_y2_temp) - avg_step * 0.4
+                    
+                    if lower_limit <= ey <= upper_limit:
+                        is_long_v = False
+                        if d['type'] == 'LINE':
+                            if abs(d['sy'] - d['ey']) > avg_step * 1.5:
+                                is_long_v = True
+                        elif d['type'] == 'LWPOLYLINE':
+                            ys = [p[1] for p in d['pts']]
+                            if ys and (max(ys) - min(ys)) > avg_step * 1.5:
+                                is_long_v = True
+                        
+                        if not is_long_v:
+                            continue
             if d['type'] == 'MTEXT':
                 cls = d.get('cls', 'fixed')
                 if cls == 'fixed':
-                    _place_entity_stretched(msp, d, dx, dy,
-                                            _stretch_split_y, _stretch_extra_h, log)
+                    if 'SUNGROW' in d['text'] or 'inverter' in d['text'].lower():
+                        d_copy = dict(d)
+                        if inverter_model:
+                            d_copy['text'] = inverter_model.upper()
+                        _place_entity_stretched(msp, d_copy, dx, dy,
+                                                _stretch_split_y, _stretch_extra_h, log)
+                    else:
+                        _place_entity_stretched(msp, d, dx, dy,
+                                                _stretch_split_y, _stretch_extra_h, log)
                 elif cls == 'panel_count':
+                    updated = d['text']
                     if panels_per_string > 0:
                         updated = re.sub(
                             r'\d+(\s*PV modules?)',
                             lambda m: f'{panels_per_string}{m.group(1)}',
-                            d['text'], flags=re.I)
-                        d_s = dict(d, y=(d['y'] - _stretch_extra_h if d['y'] < _stretch_split_y else d['y']))
+                            updated, flags=re.I)
+                    if panel_model:
+                        if '-' in updated:
+                            base = updated.split('-')[0].strip()
+                            updated = f"{base} - {panel_model}"
+                        else:
+                            updated = f"{panels_per_string if panels_per_string > 0 else 28} PV modules in series - {panel_model}"
+                    
+                    d_s = dict(d)
+                    if panels_per_string > 0 or panel_model:
                         _place_mtext(msp, d_s, dx, dy, updated, log)
                     else:
-                        _place_entity_stretched(msp, d, dx, dy,
+                        _place_entity_stretched(msp, d_s, dx, dy,
                                                 _stretch_split_y, _stretch_extra_h, log)
                 elif 'mmq' in d['text']:
-                    # Update cable section specs at the bottom dynamically based on this inverter's strings
                     sections_used = set()
                     for mppt_s in excel.get((T, I), {}).values():
                         for sdata in mppt_s:
@@ -923,14 +958,12 @@ def _generate(cfg, log):
                             d_s['layer']    = heavy_layer
                             d_s['ltscale']  = 0.5
                         else:
-                            # Reset standard cables to layer 0 and solid
                             d_s['linetype'] = 'Continuous'
                             d_s['color']    = 40
                             d_s['layer']    = '0'
                     else:
-                        # Unused / reserve connection line is drawn in dim color
                         d_s['linetype'] = 'Continuous'
-                        d_s['color']    = 8  # grey
+                        d_s['color']    = 8
                         d_s['layer']    = '0'
                         
                     _place_entity_stretched(msp, d_s, dx, dy,
@@ -946,38 +979,42 @@ def _generate(cfg, log):
                         orig_color = d.get('color', 7)
                         d_s['color'] = 7 if orig_color in (8, 253) else orig_color
                     else:
-                        d_s['color']  = 8  # gray out reserve circle terminal
+                        d_s['color']  = 8
                         
                     _place_entity_stretched(msp, d_s, dx, dy,
                                             _stretch_split_y, _stretch_extra_h, log)
                 else:
-                    # Stretches/places default template geometry
                     _place_entity_stretched(msp, d, dx, dy,
                                             _stretch_split_y, _stretch_extra_h, log)
         
         # Stamp inverter/cabin headers
         if td:
-            _place_mtext(msp, td,  dx, dy, make_inv_title(T, I), log)
-        if chd:
+            td_copy = dict(td)
+            td_copy['y'] = 165450.0  # Shift above the inverter box
+            td_copy['char_height'] = 180.0
+            _place_mtext(msp, td_copy,  dx, dy, make_inv_title(T, I), log)
+        if chd and inv_col[(T, I)] == 0:
             _place_mtext(msp, chd, dx, dy, make_cabin_hdr(T), log)
         if cld:
             _place_mtext(msp, cld, dx, dy, f"\\pxqc;Cabin Tx.{T}\\PInverter {T}.{I}", log)
             
         # Stamp parameterised string labels
         for (mppt, port), sl in mppt_map.items():
+            if mppt > max_mppts:
+                continue
             sl_wide = dict(sl, width=max(sl.get('width', 0), _STRING_LABEL_MIN_WIDTH))
             sl_wide['char_height'] = text_size_cfg
             
             label = make_string_label(T, I, mppt, port)
             if label == "reserve":
-                sl_wide['color'] = 8  # grey
+                sl_wide['color'] = 8
             else:
                 orig_color = sl.get('color', 7)
                 sl_wide['color'] = 7 if orig_color in (8, 253) else orig_color
                 
             _place_mtext(msp, sl_wide, dx, dy, label, log)
             
-        # Stamp extrapolated MPPT row geometry (cables, circles, fuses, and labels)
+        # Stamp extrapolated MPPT row geometry
         if missing and proto_ents:
             for miss_m in missing:
                 delta = miss_m - proto_last_m
@@ -990,14 +1027,12 @@ def _generate(cfg, log):
                     if 'pts3d' in d:
                         d_copy['pts3d'] = [list(p) for p in d['pts3d']]
                     
-                    # Determine which port this entity belongs to (1 or 2)
                     ey = _ent_y_dict(d)
                     port_num = 1 if abs(ey - proto_last_y1) < abs(ey - proto_last_y2) else 2
                     
                     lst = excel.get((T, I), {}).get(miss_m, [])
                     is_active = (port_num - 1 < len(lst))
                     
-                    # Apply coloring and styling based on active/reserve status
                     if d['type'] in ('LINE', 'LWPOLYLINE', 'POLYLINE'):
                         if is_active:
                             sdata = lst[port_num - 1]
@@ -1024,10 +1059,8 @@ def _generate(cfg, log):
                             d_copy['color'] = 8
                             
                     elif d['type'] == 'MTEXT':
-                        # Update port numbers (e.g. "16-1" -> "17-1")
                         txt = d['text']
                         txt = re.sub(rf'\b{proto_last_m}-(\d+)\b', f'{miss_m}-\\1', txt)
-                        # Update MPP labels (e.g. "MPP16" -> "MPP17")
                         txt = re.sub(rf'\bMPP\s*{proto_last_m}\b', f'MPP{miss_m}', txt, flags=re.I)
                         d_copy['text'] = txt
                         
@@ -1431,12 +1464,12 @@ class _PresetManagerDialog(tk.Toplevel):
 #  MAIN APP WINDOW
 # ─────────────────────────────────────────────────────────────────────────────
 
-class SLDAppV2(tk.Tk):
+class SLDAppV4(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("A176LAB - DC Single Line Diagram Generator v2")
-        self.geometry("880x820")
-        self.minsize(720, 680)
+        self.title("A176LAB - DC Single Line Diagram Generator v4")
+        self.geometry("900x560")
+        self.minsize(720, 500)
         self.resizable(True, True)
 
         style = ttk.Style(self)
@@ -1472,13 +1505,12 @@ class SLDAppV2(tk.Tk):
             ttk.Label(header, image=logo).pack(side='left', padx=(0, 14))
         txt = ttk.Frame(header)
         txt.pack(side='left', fill='y', pady=2)
-        ttk.Label(txt, text="DC Single Line Diagram Generator v2",
+        ttk.Label(txt, text="DC Single Line Diagram Generator v4",
                   font=('Segoe UI', 14, 'bold')).pack(anchor='w')
-        ttk.Label(txt, text="A176 LAB  –  Think different project",
+        ttk.Label(txt, text="A176 LAB  –  Think different project (Template-Free CAD Generation)",
                   foreground='gray', font=('Segoe UI', 9)).pack(anchor='w')
 
     def _set_icon(self):
-        """Set window and taskbar icon from A176LAB logo."""
         try:
             from PIL import Image, ImageTk
             img = Image.open(_LOGO_PATH).convert('RGBA')
@@ -1496,17 +1528,6 @@ class SLDAppV2(tk.Tk):
         ttk.Label(tab, text="File Paths Configuration",
                   font=('Segoe UI', 11, 'bold')).pack(anchor='w', pady=(0, 10))
 
-        # Default paths setup
-        default_tmpl = r'C:\Users\user\Desktop\SLD Diagram\YANEL\26S001_2E103 - DC Single Line Diagram.dxf'
-        if not os.path.exists(default_tmpl):
-            default_tmpl = ''
-
-        self.fe_tmpl = _FileRow(
-            tab, "Template DXF:",
-            default=default_tmpl,
-            filetypes=[('DXF files', '*.dxf'), ('All files', '*.*')])
-        self.fe_tmpl.pack(fill='x', pady=2)
-
         self.fe_xlsx = _FileRow(
             tab, "Excel Cable List:",
             filetypes=[('Excel files', '*.xlsx *.xls'), ('All files', '*.*')])
@@ -1521,9 +1542,9 @@ class SLDAppV2(tk.Tk):
         ttk.Separator(tab).pack(fill='x', pady=12)
 
         hint = (
-            "Template DXF      - Source DXF template containing Inverter 1.1 layout slice.\n"
             "Excel Cable List  - Project schedule with sheets '2E802-3' and 'Inverter To String'.\n"
             "Output DXF        - Saved diagram path (auto-fills to target folder as Excel file).\n\n"
+            "Note: The template geometry is loaded internally from 'template_data.json'. The Template DXF file is no longer required.\n\n"
             "F5 starts diagram generation automatically."
         )
         ttk.Label(tab, text=hint, foreground='gray',
@@ -1542,49 +1563,71 @@ class SLDAppV2(tk.Tk):
 
         # Solar Panel section
         self._section(tab, "Solar Panel")
-        self.f_panel_model = _HistoryCombo(
-            tab, "Panel Model:", 'panel_model',
-            refresh_callback=self._refresh_all_combos)
-        self.f_panel_model.pack(fill='x')
+        
+        panel_cols = ttk.Frame(tab)
+        panel_cols.pack(fill='x', pady=2)
+        left_p = ttk.Frame(panel_cols)
+        left_p.pack(side='left', fill='x', expand=True)
+        right_p = ttk.Frame(panel_cols)
+        right_p.pack(side='left', fill='x', expand=True)
 
-        ttk.Label(tab, text="  Module ratings are parsed dynamically from Excel sheet '2E802-3'.",
-                  foreground='gray', font=('Segoe UI', 8)).pack(anchor='w', padx=6)
+        self.f_panel_model = _HistoryCombo(
+            left_p, "Panel Model:", 'panel_model',
+            refresh_callback=self._refresh_all_combos)
+        self.f_panel_model.pack(fill='x', pady=2)
 
         self.f_panels_str = _HistoryCombo(
-            tab, "Panels per String:", 'panels_per_string',
+            right_p, "Panels per String:", 'panels_per_string',
             default='20', unit='panels', width=14,
             refresh_callback=self._refresh_all_combos)
-        self.f_panels_str.pack(fill='x')
+        self.f_panels_str.pack(fill='x', pady=2)
 
-        ttk.Separator(tab).pack(fill='x', pady=10)
+        ttk.Label(tab, text="  → Module ratings are parsed dynamically from Excel sheet '2E802-3'.",
+                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 6))
+
+        ttk.Separator(tab).pack(fill='x', pady=8)
 
         # Inverter section
         self._section(tab, "Inverter Specs")
+        
+        inv_cols = ttk.Frame(tab)
+        inv_cols.pack(fill='x', pady=2)
+        left_i = ttk.Frame(inv_cols)
+        left_i.pack(side='left', fill='x', expand=True)
+        right_i = ttk.Frame(inv_cols)
+        right_i.pack(side='left', fill='x', expand=True)
+
         self.f_inv_model = _HistoryCombo(
-            tab, "Inverter Model:", 'inverter_model',
+            left_i, "Inverter Model:", 'inverter_model',
             refresh_callback=self._refresh_all_combos,
             on_select=_on_inverter_model_select)
-        self.f_inv_model.pack(fill='x')
+        self.f_inv_model.pack(fill='x', pady=2)
+
+        self.f_max_mppts = _FieldRow(
+            right_i, "Inverter Max MPPTs:", "Auto",
+            unit="channels", width=14)
+        self.f_max_mppts.pack(fill='x', pady=2)
 
         self.f_dc_power = _HistoryCombo(
-            tab, "DC Power per Inverter:", 'dc_power_kwp',
-            default='350', unit='KWp  (0 = calculate from module ratings)', width=14,
+            left_i, "DC Power per Inverter:", 'dc_power_kwp',
+            default='350', unit='KWp', width=14,
             refresh_callback=self._refresh_all_combos)
-        self.f_dc_power.pack(fill='x')
+        self.f_dc_power.pack(fill='x', pady=2)
 
         self.f_ac_power = _HistoryCombo(
-            tab, "AC Power:", 'ac_power_kwac',
+            right_i, "AC Power:", 'ac_power_kwac',
             default='320', unit='KWac', width=14,
             refresh_callback=self._refresh_all_combos)
-        self.f_ac_power.pack(fill='x')
+        self.f_ac_power.pack(fill='x', pady=2)
 
-        self.f_temp = _FieldRow(tab, "Temperature Rating:", '40', unit='°C')
-        self.f_temp.pack(fill='x')
+        self.f_temp = _FieldRow(
+            left_i, "Temperature Rating:", '40',
+            unit='°C', width=14)
+        self.f_temp.pack(fill='x', pady=2)
 
-        ttk.Separator(tab).pack(fill='x', pady=10)
-        self._section(tab, "Label Options")
-        self.f_show_cable_info = _CheckboxRow(tab, "Show Cable Length & Section:", default=False)
-        self.f_show_cable_info.pack(fill='x')
+        self.f_show_cable_info = _CheckboxRow(
+            right_i, "Show Cable Info:", default=False)
+        self.f_show_cable_info.pack(fill='x', pady=2)
 
     # ── Workspace Parameters Tab ──────────────────────────────────────────────
     def _build_workspace_tab(self, nb):
@@ -1592,60 +1635,83 @@ class SLDAppV2(tk.Tk):
         nb.add(tab, text='  Workspace Parameters  ')
 
         self._section(tab, "Array Grid Layout Steps")
-        self.f_col_spacing = _FieldRow(tab, "Horizontal Grid Col Step:", str(_COL_SPACING_DEFAULT),
-                                       unit="units (AutoCAD distance coordinates)")
-        self.f_col_spacing.pack(fill='x')
-        ttk.Label(tab, text="  → Controls the horizontal spacing (X-axis offset) between stamped inverter columns.",
-                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 6))
+        
+        sec1_cols = ttk.Frame(tab)
+        sec1_cols.pack(fill='x', pady=2)
+        left1 = ttk.Frame(sec1_cols)
+        left1.pack(side='left', fill='x', expand=True)
+        right1 = ttk.Frame(sec1_cols)
+        right1.pack(side='left', fill='x', expand=True)
 
-        self.f_row_spacing = _FieldRow(tab, "Vertical Grid Row Step:", str(_ROW_SPACING_DEFAULT),
-                                       unit="units (AutoCAD distance coordinates)")
-        self.f_row_spacing.pack(fill='x')
-        ttk.Label(tab, text="  → Controls the vertical spacing (Y-axis offset) between stamped transformer rows.",
-                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 6))
+        self.f_col_spacing = _FieldRow(left1, "Horizontal Grid Col Step:", str(_COL_SPACING_DEFAULT),
+                                        unit="units", width=14)
+        self.f_col_spacing.pack(fill='x', pady=2)
+        ttk.Label(left1, text="  → Spacing between stamped inverter columns.",
+                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 4))
+
+        self.f_row_spacing = _FieldRow(right1, "Vertical Grid Row Step:", str(_ROW_SPACING_DEFAULT),
+                                        unit="units", width=14)
+        self.f_row_spacing.pack(fill='x', pady=2)
+        ttk.Label(right1, text="  → Spacing between stamped transformer rows.",
+                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 4))
 
         ttk.Separator(tab).pack(fill='x', pady=8)
 
         self._section(tab, "Visual Node Elements")
-        self.f_circle_radius = _FieldRow(tab, "Module Circle Radius:", "24.59",
-                                         unit="units (AutoCAD drawing units)")
-        self.f_circle_radius.pack(fill='x')
-        ttk.Label(tab, text="  → The physical radius of terminal circles (representing switches/disconnectors) on active ports.",
-                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 6))
+        
+        sec2_cols = ttk.Frame(tab)
+        sec2_cols.pack(fill='x', pady=2)
+        left2 = ttk.Frame(sec2_cols)
+        left2.pack(side='left', fill='x', expand=True)
+        right2 = ttk.Frame(sec2_cols)
+        right2.pack(side='left', fill='x', expand=True)
 
-        self.f_text_size = _FieldRow(tab, "String Label Text Height:", "60.44",
-                                     unit="units (AutoCAD text size)")
-        self.f_text_size.pack(fill='x')
-        ttk.Label(tab, text="  → Height/font size of the generated string label texts on the right side of the diagram.",
-                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 6))
+        self.f_circle_radius = _FieldRow(left2, "Module Circle Radius:", "24.59",
+                                          unit="units", width=14)
+        self.f_circle_radius.pack(fill='x', pady=2)
+        ttk.Label(left2, text="  → Radius of terminal switch/disconnector circles.",
+                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 4))
+
+        self.f_text_size = _FieldRow(right2, "String Label Text Height:", "60.44",
+                                      unit="units", width=14)
+        self.f_text_size.pack(fill='x', pady=2)
+        ttk.Label(right2, text="  → Font height of generated string label texts.",
+                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 4))
 
         ttk.Separator(tab).pack(fill='x', pady=8)
 
         self._section(tab, "Heavy Cable Run Custom Styling (Layer / Linetype Override)")
         
-        self.f_heavy_section = _FieldRow(tab, "Target Heavy Section:", "1x10",
-                                         unit="mm² (cables matching this string are custom-styled)")
-        self.f_heavy_section.pack(fill='x')
-        ttk.Label(tab, text="  → Cross-section size matching the Excel section values to format differently (e.g., to highlight heavy runs).",
-                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 6))
+        sec3_cols = ttk.Frame(tab)
+        sec3_cols.pack(fill='x', pady=2)
+        left3 = ttk.Frame(sec3_cols)
+        left3.pack(side='left', fill='x', expand=True)
+        right3 = ttk.Frame(sec3_cols)
+        right3.pack(side='left', fill='x', expand=True)
 
-        self.f_heavy_linetype = _FieldRow(tab, "Heavy Run Linetype:", "TRATTEGGIATA",
-                                          unit="Linetype name to apply")
-        self.f_heavy_linetype.pack(fill='x')
-        ttk.Label(tab, text="  → Linetype style to apply to matching heavy runs (e.g. TRATTEGGIATA/Dashed, Continuous/Solid).",
-                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 6))
+        self.f_heavy_section = _FieldRow(left3, "Target Heavy Section:", "1x10",
+                                          unit="mm²", width=14)
+        self.f_heavy_section.pack(fill='x', pady=2)
+        ttk.Label(left3, text="  → Section to format differently (e.g. 1x10).",
+                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 4))
 
-        self.f_heavy_color = _FieldRow(tab, "Heavy Run Color (ACI):", "40",
-                                       unit="AutoCAD Color Index (e.g. 1=Red, 40=Orange/Brown)")
-        self.f_heavy_color.pack(fill='x')
-        ttk.Label(tab, text="  → AutoCAD Color Index (ACI) used to draw heavy active cables (non-grey colors recommended).",
-                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 6))
+        self.f_heavy_linetype = _FieldRow(right3, "Heavy Run Linetype:", "TRATTEGGIATA",
+                                           unit="name", width=14)
+        self.f_heavy_linetype.pack(fill='x', pady=2)
+        ttk.Label(right3, text="  → AutoCAD linetype to apply to matching heavy runs.",
+                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 4))
 
-        self.f_heavy_layer = _FieldRow(tab, "Heavy Run Layer Name:", "TRATTEGGIATA",
-                                       unit="Destination layer for heavy runs")
-        self.f_heavy_layer.pack(fill='x')
-        ttk.Label(tab, text="  → Layer where the heavy runs will be placed (makes it easy to toggle visibility in AutoCAD).",
-                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 6))
+        self.f_heavy_color = _FieldRow(left3, "Heavy Run Color (ACI):", "40",
+                                        unit="index", width=14)
+        self.f_heavy_color.pack(fill='x', pady=2)
+        ttk.Label(left3, text="  → AutoCAD Color Index (ACI) used to draw heavy runs.",
+                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 4))
+
+        self.f_heavy_layer = _FieldRow(right3, "Heavy Run Layer Name:", "TRATTEGGIATA",
+                                        unit="name", width=14)
+        self.f_heavy_layer.pack(fill='x', pady=2)
+        ttk.Label(right3, text="  → Layer name where heavy runs will be placed.",
+                  foreground='gray', font=('Segoe UI', 8, 'italic')).pack(anchor='w', padx=(190, 6), pady=(0, 4))
 
     # ── Generate / Log Tab ────────────────────────────────────────────────────
     def _build_run_tab(self, nb):
@@ -1656,11 +1722,11 @@ class SLDAppV2(tk.Tk):
         ctrl.pack(fill='x', pady=(0, 6))
 
         self.gen_btn = ttk.Button(ctrl, text='▶  Generate SLD  (F5)',
-                                   command=self._on_generate)
+                                    command=self._on_generate)
         self.gen_btn.pack(side='left', ipadx=10, ipady=4)
 
         ttk.Button(ctrl, text='Clear Log',
-                   command=self._clear_log).pack(side='left', padx=8)
+                    command=self._clear_log).pack(side='left', padx=8)
 
         self.progress = ttk.Progressbar(ctrl, mode='indeterminate', length=160)
         self.progress.pack(side='left', padx=8)
@@ -1700,12 +1766,12 @@ class SLDAppV2(tk.Tk):
 
     def _collect(self):
         return {
-            'template_dxf':      self.fe_tmpl.get(),
             'xlsx_path':         self.fe_xlsx.get(),
             'output_path':       self.fe_out.get(),
             'panel_model':       self.f_panel_model.get(),
             'panels_per_string': self.f_panels_str.get(),
             'inverter_model':    self.f_inv_model.get(),
+            'max_mppts':         self.f_max_mppts.get(),
             'dc_power_kwp':      self.f_dc_power.get(),
             'ac_power_kwac':     self.f_ac_power.get(),
             'temp_rating':       self.f_temp.get(),
@@ -1724,10 +1790,6 @@ class SLDAppV2(tk.Tk):
 
     def _validate(self, cfg):
         errs = []
-        if not cfg.get('template_dxf'):
-            errs.append("Template DXF path is required.")
-        elif not os.path.isfile(cfg['template_dxf']):
-            errs.append(f"Template DXF not found:\n  {cfg['template_dxf']}")
         if not cfg['xlsx_path']:
             errs.append("Excel file path is required.")
         elif not os.path.isfile(cfg['xlsx_path']):
@@ -1745,6 +1807,7 @@ class SLDAppV2(tk.Tk):
             ('dc_power_kwp',      'DC Power'),
             ('ac_power_kwac',     'AC Power'),
             ('temp_rating',       'Temperature Rating'),
+            ('max_mppts',         'Inverter Max MPPTs'),
             ('col_spacing',       'Horizontal Col Step'),
             ('row_spacing',       'Vertical Row Step'),
             ('circle_radius',     'Module Circle Radius'),
@@ -1754,10 +1817,20 @@ class SLDAppV2(tk.Tk):
         for key, label in num_fields:
             val = cfg.get(key, '')
             if val:
+                if key == 'max_mppts' and val.strip().lower() == 'auto':
+                    continue
                 try:
                     float(val)
                 except ValueError:
                     errs.append(f"{label}: must be a number (got '{val}').")
+        val = cfg.get('max_mppts', '')
+        if val and val.strip().lower() != 'auto':
+            try:
+                val_int = int(float(val))
+                if val_int < 1:
+                    errs.append("Inverter Max MPPTs must be at least 1.")
+            except ValueError:
+                pass
         return errs
 
     def _sync_output_path(self, *_):
@@ -1781,7 +1854,7 @@ class SLDAppV2(tk.Tk):
         self.progress.start(12)
         self.status_var.set("Generating ...")
         self._log("=" * 64)
-        self._log("Starting upgraded SLD diagram generation ...")
+        self._log("Starting template-free SLD diagram generation ...")
 
         def worker():
             try:
@@ -1800,7 +1873,6 @@ class SLDAppV2(tk.Tk):
                       self.f_inv_model, self.f_dc_power, self.f_ac_power):
             combo.record()
         
-        # Open directory link confirm box
         msg = f"SLD generated successfully!\n\nOutput saved at:\n{path}"
         messagebox.showinfo("Success", msg)
 
@@ -1813,5 +1885,5 @@ class SLDAppV2(tk.Tk):
 
 
 if __name__ == '__main__':
-    app = SLDAppV2()
+    app = SLDAppV4()
     app.mainloop()

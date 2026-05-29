@@ -9,7 +9,7 @@ The tool stamps a template inverter block for every inverter defined in the cabl
 
 ## Features
 
-- **GUI application** (`sld_gui.py`) — three-tab interface, no command-line knowledge required
+- **GUI application** (`sld_gui_v4.py`) — four-tab interface, no command-line knowledge required
 - **Auto-layout** — inverters arranged in rows (one per transformer) and columns automatically
 - **Fully parameterised labels** — inverter title, cabin header, string labels, and panel info all driven by user inputs
 - **Auto-calculate DC power** — set DC power to 0 and the tool computes `strings × panels × Wp ÷ 1000` per inverter
@@ -39,7 +39,7 @@ Python **3.10+** required (walrus operator `:=` used internally).
 
 ```bash
 cd "SLD Diagram/code"
-python sld_gui.py
+python sld_gui_v4.py
 ```
 
 Press **F5** or click **▶ Generate SLD** on the Generate tab.
@@ -52,7 +52,6 @@ Press **F5** or click **▶ Generate SLD** on the Generate tab.
 
 | Field | Description |
 |-------|-------------|
-| Template DXF | Source DXF containing **Inverter 1.1** as the stamp template (Y-band 159 400 – 168 000 drawing units) |
 | Excel Cable List | Project cable schedule — must contain sheet `2E802-3` (see [Excel Format](#excel-format)) |
 | Output DXF | Destination file — **auto-filled** to the same folder and base-name as the Excel file when you browse |
 
@@ -62,26 +61,44 @@ Press **F5** or click **▶ Generate SLD** on the Generate tab.
 | Field | Default | Notes |
 |-------|---------|-------|
 | Panel Model | *(blank)* | Shown in each string label, e.g. `JA Solar JAM72S20-460` |
-| Power per Panel | 460 Wp | Used for auto DC-power calculation |
 | Panels per String | 20 | Appended to string labels, e.g. `String 1.2.3 - 20× JA Solar 460Wp` |
 
-#### Inverter
+#### Inverter Specs
 | Field | Default | Notes |
 |-------|---------|-------|
 | Inverter Model | *(blank)* | Shown in inverter title, e.g. `Huawei SUN2000-330KTL` |
+| Inverter Max MPPTs | Auto | Maximum number of MPPT channels (detects from Excel if set to `Auto`) |
 | DC Power per Inverter | 350 KWp | Set to **0** to auto-calculate from panel data |
 | AC Power | 320 KWac | Shown in inverter title |
 | Temperature Rating | 40 °C | Shown as `@40°C` in title |
+| Show Cable Info | False (unchecked) | If checked, appends cable lengths (L+, L-) and section to string labels |
 
-#### Transformer
-| Field | Notes |
-|-------|-------|
-| Transformer Power | Optional — appended to the cabin header, e.g. `CABIN 1 / 2.5 MVA` |
+### Tab 3 — Workspace Parameters
 
-### Tab 3 — Generate
+#### Array Grid Layout Steps
+| Field | Default | Notes |
+|-------|---------|-------|
+| Horizontal Grid Col Step | 15000 units | Spacing between stamped inverter columns |
+| Vertical Grid Row Step | 10200 units | Spacing between stamped transformer rows |
+
+#### Visual Node Elements
+| Field | Default | Notes |
+|-------|---------|-------|
+| Module Circle Radius | 24.59 units | Radius of terminal switch/disconnector circles |
+| String Label Text Height | 60.44 units | Font height of generated string label texts |
+
+#### Heavy Cable Run Custom Styling
+| Field | Default | Notes |
+|-------|---------|-------|
+| Target Heavy Section | 1x10 mm² | Section to format differently (e.g. 1x10) |
+| Heavy Run Linetype | TRATTEGGIATA | AutoCAD linetype to apply to matching heavy runs |
+| Heavy Run Color (ACI) | 40 | AutoCAD Color Index (ACI) used to draw heavy runs |
+| Heavy Run Layer Name | TRATTEGGIATA | Layer name where heavy runs will be placed |
+
+### Tab 4 — Generate
 
 - **▶ Generate SLD (F5)** — starts generation in a background thread
-- Live log shows each step: Excel read → template load → entity extraction → section stamping → paper-space creation → save
+- Live log shows each step: Excel read → internal template load → entity extraction → section stamping → paper-space creation → save
 - Success/error dialogs on completion
 
 ---
@@ -122,7 +139,9 @@ Rows without an inverter ID in column 1 are treated as continuation rows of the 
 ```
 SLD Diagram/
 ├── code/
-│   ├── sld_gui.py           # GUI application (main entry point)
+│   ├── sld_gui_v4.py        # GUI application (latest entry point)
+│   ├── extract_template.py  # Script to extract template DXF geometry to JSON
+│   ├── template_data.json   # Internal template geometry data loaded by GUI
 │   ├── generate_sld.py      # Original CLI script (standalone, no GUI)
 │   └── logoA176LAB.jpg      # A176 LAB logo
 ├── YANEL/
@@ -158,9 +177,13 @@ This produces a unique per-inverter DC value if inverters have different string 
 
 ---
 
-## Template DXF Requirements
+## Template DXF & Extract Requirements
 
-The template DXF must contain **Inverter 1.1** in the Y-band `159 400 – 168 000` drawing units with:
+The template geometry is loaded internally from `code/template_data.json`. If you need to update it from a new master DXF template:
+1. Update `DXF_PATH` in `code/extract_template.py` to point to your new DXF template.
+2. Run `python extract_template.py` to regenerate `template_data.json`.
+
+The master DXF template must contain **Inverter 1.1** in the Y-band `159 400 – 168 000` drawing units with:
 
 - `MTEXT` matching `INVERTER 1.1 … P= …` → used as the inverter title template
 - `MTEXT` matching `CABIN \d+` → used as the cabin header template
@@ -174,5 +197,4 @@ All other geometry (lines, polylines, arcs, circles, inserts) is copied verbatim
 
 ## Credits
 
-Developed by **A176 LAB** — *Think different project*  
-Contact: info@a176lab.it
+Developed by **Muhammad Abbasi** — Data Scientist and Automation Engineer at *A176 LAB*  

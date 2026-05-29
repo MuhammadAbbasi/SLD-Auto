@@ -14,13 +14,12 @@ import ezdxf
 import json
 import os
 
-DXF_PATH       = os.path.join(os.path.dirname(__file__),
-                               r'../YANEL/26S001_2E103 - DC Single Line Diagram.dxf')
-DXF_PATH       = os.path.normpath(os.path.abspath(DXF_PATH))
+DXF_PATH       = r'C:\Users\user\Desktop\SLD Diagram\Example\ETN-EPC-SUN-ELE-DRW-003 - LV Single Line Diagram.dxf'
 OUTPUT_PATH    = os.path.join(os.path.dirname(__file__), 'template_data.json')
-TEMPLATE_Y_MIN = 159_400
+TEMPLATE_Y_MIN = 159_000
 TEMPLATE_Y_MAX = 168_000
-COL_STEP       = 11_740   # kept in JSON for reference
+COL_STEP       = 11_737.3
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,7 +163,8 @@ def main():
     # Collect template-band entities
     tmpl_raw = [e for e in msp
                 if (y := entity_y(e)) is not None
-                and TEMPLATE_Y_MIN <= y <= TEMPLATE_Y_MAX]
+                and TEMPLATE_Y_MIN <= y <= TEMPLATE_Y_MAX
+                and (not e.dxf.hasattr('layer') or e.dxf.layer.lower() != 'defpoints')]
     print(f"Template-band entities : {len(tmpl_raw)}")
 
     # Extract to dicts

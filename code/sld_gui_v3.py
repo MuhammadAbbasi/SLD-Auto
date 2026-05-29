@@ -446,7 +446,7 @@ def _generate(cfg, log):
     ac_power_kwac     = float(cfg.get('ac_power_kwac') or 0)
     temp_rating       = float(cfg.get('temp_rating') or 40)
     transformer_power = cfg.get('transformer_power', '').strip()
-    show_cable_info   = cfg.get('show_cable_info', True)
+    show_cable_info   = cfg.get('show_cable_info', False)
     max_mppts_raw = str(cfg.get('max_mppts', 'Auto')).strip()
     if max_mppts_raw.lower() == 'auto':
         max_mppts = None
@@ -1646,7 +1646,7 @@ class SLDAppV3(tk.Tk):
 
         ttk.Separator(tab).pack(fill='x', pady=10)
         self._section(tab, "Label Options")
-        self.f_show_cable_info = _CheckboxRow(tab, "Show Cable Length & Section:", default=True)
+        self.f_show_cable_info = _CheckboxRow(tab, "Show Cable Length & Section:", default=False)
         self.f_show_cable_info.pack(fill='x')
 
     # ── Workspace Parameters Tab ──────────────────────────────────────────────
