@@ -61,6 +61,7 @@ $RECYCLE.BIN/
 *.tmp
 *.bak
 *.swp
+*.spec
 
 # ── General Data & Drawings (Confidential/large files) ────────────────────────
 *.xlsx

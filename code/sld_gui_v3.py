@@ -1556,8 +1556,8 @@ class SLDAppV3(tk.Tk):
                   font=('Segoe UI', 11, 'bold')).pack(anchor='w', pady=(0, 10))
 
         # Default paths setup
-        default_tmpl = r'C:\Users\user\Desktop\SLD Diagram\YANEL\26S001_2E103 - DC Single Line Diagram.dxf'
-        if not os.path.exists(default_tmpl):
+        default_tmpl = r'\\S01\2 privato\2025.046 - Sunnerg YANEL\26S001_2E103 - DC Single Line Diagram.dxf'
+        if not default_tmpl.startswith('\\\\') and not os.path.exists(default_tmpl):
             default_tmpl = ''
 
         self.fe_tmpl = _FileRow(
