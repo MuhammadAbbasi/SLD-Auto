@@ -1,51 +1,92 @@
-# ── Python ────────────────────────────────────────────────────────────────────
+# ==============================================================================
+# .gitignore - A176LAB SLD Generator
+# ==============================================================================
+
+# ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 *.pyw~
 *.egg-info/
-dist/
-build/
 .eggs/
 pip-wheel-metadata/
 *.egg
 
-# ── Virtual environments ──────────────────────────────────────────────────────
+# ── Virtual environments ─────────────────────────────────────────────────────
 .venv/
 venv/
 env/
 ENV/
+
+# ── Environment / secrets ────────────────────────────────────────────────────
 .env
+.env.*
+*.env
+# Set SLD_TEMPLATE_PATH here instead of hardcoding in source
+
+# ── Old / archived code versions ─────────────────────────────────────────────
+code/old/
+
+# ── Build artifacts & distribution ──────────────────────────────────────────
+code/build/
+code/dist/
+build/
+dist/
+*.spec
+*.exe
+*.app
 
 # ── Generated / output DXF files ─────────────────────────────────────────────
 *_Generated.dxf
 *_generated.dxf
 *_SLD_*.dxf
 
-# ── Large binary source files (keep template DXF via Git LFS or manual copy) ──
-# Template DXF (36 MB) – track with Git LFS instead:
-#   git lfs track "*.dxf"
-YANEL/*.dxf
-Example/*.dxf
-Example/*.dwg
-"2025.017 - PV WYMONDLEY"/*.dxf
+# ── Large binary files (DXF / DWG / Excel) ───────────────────────────────────
+*.dxf
+*.dwg
+*.xlsx
+*.xls
 
-# ── Project data / cable lists (client-specific Excel files) ─────────────────
-YANEL/*.xlsx
-Example/*.xlsx
+# ── Template DXF (mount via Docker volume, never bake into image/repo) ───────
+webapp/template/*.dxf
+
+# ── GUI / app runtime data ───────────────────────────────────────────────────
+code/history.json
+code/history_v2.json
+code/smart_history.json
+code/template_data.json
+
+# ── Media / screenshots / compiled assets ────────────────────────────────────
+code/screenshots/
+media/
+*.ico
+code/logoA176LAB.jpg
+code/logoA176LAB.ico
+
+# ── Client project folders (contain confidential data and large files) ────────
+YANEL/
+Example/
+Bellomo/
+Template/
 2025.017*/
+"PV WYMONDLY"/
+PV*/
 
-# ── IDE / editor ──────────────────────────────────────────────────────────────
+# ── External / sub-projects (managed independently) ─────────────────────────
+Easy-MCP-AutoCad/
+
+# ── IDE / editor ─────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+*.code-workspace
 *.sublime-project
 *.sublime-workspace
 *.suo
 *.user
 .vs/
 
-# ── Windows ───────────────────────────────────────────────────────────────────
+# ── Windows ──────────────────────────────────────────────────────────────────
 Thumbs.db
 ehthumbs.db
 Desktop.ini
@@ -56,24 +97,8 @@ $RECYCLE.BIN/
 .AppleDouble
 .LSOverride
 
-# ── Logs / temp ───────────────────────────────────────────────────────────────
+# ── Logs / temp ──────────────────────────────────────────────────────────────
 *.log
 *.tmp
 *.bak
 *.swp
-*.spec
-
-# ── General Data & Drawings (Confidential/large files) ────────────────────────
-*.xlsx
-*.xls
-*.dxf
-*.dwg
-
-# ── Local history ─────────────────────────────────────────────────────────────
-code/history_v2.json
-
-# ── Development & nested/external projects ────────────────────────────────────
-Bellomo/
-Easy-MCP-AutoCad/
-demo/
-
