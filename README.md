@@ -1,136 +1,195 @@
-# DC Single Line Diagram Generator
+# A176LAB - DC Single Line Diagram Generator
 
-> **A176 LAB – Think different project**
+**Automatically generate DC Single Line Diagram (SLD) DXF files** for utility-scale solar PV plants from an Excel cable schedule.
 
-Automatically generate DC Single Line Diagram (SLD) DXF files for utility-scale solar PV plants from an Excel cable list.  
-The tool stamps a template inverter block for every inverter defined in the cable list, wires in all string/MPPT labels, and produces one A3 paper-space layout per transformer — ready to open in AutoCAD, BricsCAD, or any DXF-compatible viewer.
-
----
-
-## Features
-
-- **GUI application** (`sld_gui_v4.py`) — four-tab interface, no command-line knowledge required
-- **Auto-layout** — inverters arranged in rows (one per transformer) and columns automatically
-- **Fully parameterised labels** — inverter title, cabin header, string labels, and panel info all driven by user inputs
-- **Auto-calculate DC power** — set DC power to 0 and the tool computes `strings × panels × Wp ÷ 1000` per inverter
-- **A176 LAB logo** embedded in every paper-space layout (top-right corner) and shown in the GUI header
-- **Background generation** — UI stays responsive; progress shown in the live log
-- **Input validation** — clear error messages before any file is touched
+The tool stamps a template inverter block for every inverter in the cable schedule, wires in all string/MPPT labels, auto-sizes each inverter section to match its MPPT count, and produces one A3 paper-space layout per transformer - ready to open in AutoCAD, BricsCAD, or any DXF viewer.
 
 ---
 
-## Requirements
+## Two Ways to Run
 
-| Package | Purpose |
-|---------|---------|
-| `ezdxf` | Read/write DXF files |
-| `openpyxl` | Read Excel cable lists |
-| `Pillow` | Logo display in GUI and image pixel-size detection *(optional but recommended)* |
+| Mode | File | Best for |
+|---|---|---|
+| Windows EXE | `A176LAB_SLD_Generator.exe` | End users, no Python needed |
+| Python GUI | `code/smart_sld_generator.py` | Developers, customisation |
+| Web App (Docker) | `webapp/` | Team use, browser-based UI |
 
-```bash
-pip install ezdxf openpyxl Pillow
+---
+
+## Standalone Windows EXE
+
+Download `A176LAB_SLD_Generator.exe` and double-click. No installation required.
+
+The GUI opens directly. Fill in the fields and press **F5** or click **Execute Generation**.
+
+---
+
+## Run from Source (Python GUI)
+
+### Requirements
+
+```
+Python 3.10+
 ```
 
-Python **3.10+** required (walrus operator `:=` used internally).
+```bash
+pip install ezdxf openpyxl customtkinter Pillow
+```
 
----
+| Package | Purpose |
+|---|---|
+| `ezdxf` | Read/write DXF files |
+| `openpyxl` | Read Excel cable schedules |
+| `customtkinter` | Modern Material-style GUI |
+| `Pillow` | Logo image processing (optional) |
 
-## Quick Start
+### Launch
 
 ```bash
 cd "SLD Diagram/code"
-python sld_gui_v4.py
+python smart_sld_generator.py
 ```
 
-Press **F5** or click **▶ Generate SLD** on the Generate tab.
+Press **F5** or click **Execute Generation**.
+
+### Template path (optional)
+
+Set the environment variable so the template field pre-fills on launch:
+
+```bash
+# Windows
+set SLD_TEMPLATE_PATH=C:\path\to\your\template.dxf
+
+# PowerShell
+$env:SLD_TEMPLATE_PATH = "C:\path\to\your\template.dxf"
+```
+
+---
+
+## Web App (Docker)
+
+See [webapp/README.md](webapp/README.md) for Docker deployment instructions.
 
 ---
 
 ## GUI Overview
 
-### Tab 1 — Files
+### Section 1 - Files
 
 | Field | Description |
-|-------|-------------|
-| Excel Cable List | Project cable schedule — must contain sheet `2E802-3` (see [Excel Format](#excel-format)) |
-| Output DXF | Destination file — **auto-filled** to the same folder and base-name as the Excel file when you browse |
+|---|---|
+| Excel Cable Schedule | Project cable schedule (must contain sheet `2E802-3`) |
+| Template DXF | Base DXF containing one stamped inverter block for Inverter 1.1 |
+| Output DXF | Destination file - auto-filled from the Excel filename |
 
-### Tab 2 — Equipment
+### Section 2 - PV System Configuration
 
-#### Solar Panel
 | Field | Default | Notes |
-|-------|---------|-------|
-| Panel Model | *(blank)* | Shown in each string label, e.g. `JA Solar JAM72S20-460` |
-| Panels per String | 20 | Appended to string labels, e.g. `String 1.2.3 - 20× JA Solar 460Wp` |
+|---|---|---|
+| Panel Model | *(blank)* | Shown in string labels, e.g. `JA Solar JAM72D42-625/LB` |
+| Panels per String | 28 | Appended to string labels |
+| Inverter Model | *(blank)* | Shown in inverter title; selecting from the list auto-fills DC/AC power |
+| DC Power (KWp) | 350 | Set to `0` to auto-calculate from `strings x panels x Wp / 1000` |
+| AC Power (KWac) | 320 | Shown in inverter title |
+| Temperature Rating | 40 C | Shown as `@40C` in the title |
+| Transformer Power | *(blank)* | Shown under the cabin header |
 
-#### Inverter Specs
-| Field | Default | Notes |
-|-------|---------|-------|
-| Inverter Model | *(blank)* | Shown in inverter title, e.g. `Huawei SUN2000-330KTL` |
-| Inverter Max MPPTs | Auto | Maximum number of MPPT channels (detects from Excel if set to `Auto`) |
-| DC Power per Inverter | 350 KWp | Set to **0** to auto-calculate from panel data |
-| AC Power | 320 KWac | Shown in inverter title |
-| Temperature Rating | 40 °C | Shown as `@40°C` in title |
-| Show Cable Info | False (unchecked) | If checked, appends cable lengths (L+, L-) and section to string labels |
+### Section 3 - Display Options
 
-### Tab 3 — Workspace Parameters
+| Option | Default | Notes |
+|---|---|---|
+| Show cable lengths | off | Appends `L+`, `L-`, section to string labels |
+| Hide string details | on | Hides panel count/model from labels |
+| Show annotation circle | on | Large red circle from the template |
 
-#### Array Grid Layout Steps
-| Field | Default | Notes |
-|-------|---------|-------|
-| Horizontal Grid Col Step | 15000 units | Spacing between stamped inverter columns |
-| Vertical Grid Row Step | 10200 units | Spacing between stamped transformer rows |
+### Section 4 - Advanced Settings
 
-#### Visual Node Elements
-| Field | Default | Notes |
-|-------|---------|-------|
-| Module Circle Radius | 24.59 units | Radius of terminal switch/disconnector circles |
-| String Label Text Height | 60.44 units | Font height of generated string label texts |
-
-#### Heavy Cable Run Custom Styling
-| Field | Default | Notes |
-|-------|---------|-------|
-| Target Heavy Section | 1x10 mm² | Section to format differently (e.g. 1x10) |
-| Heavy Run Linetype | TRATTEGGIATA | AutoCAD linetype to apply to matching heavy runs |
-| Heavy Run Color (ACI) | 40 | AutoCAD Color Index (ACI) used to draw heavy runs |
-| Heavy Run Layer Name | TRATTEGGIATA | Layer name where heavy runs will be placed |
-
-### Tab 4 — Generate
-
-- **▶ Generate SLD (F5)** — starts generation in a background thread
-- Live log shows each step: Excel read → internal template load → entity extraction → section stamping → paper-space creation → save
-- Success/error dialogs on completion
+| Field | Default |
+|---|---|
+| Column spacing | 14323 |
+| Row spacing | 12036 |
+| Circle radius | 24.59 |
+| Text size | 60.44 |
+| Heavy section | 1x10 |
+| Heavy linetype | TRATTEGGIATA |
+| Heavy color (ACI) | 40 |
+| Heavy layer | TRATTEGGIATA |
 
 ---
 
 ## Excel Format
 
-Sheet name: **`2E802-3`**
+The workbook must contain a sheet named **`2E802-3`** (case-insensitive).
 
-| Column | Content | Example |
-|--------|---------|---------|
-| 1 | Inverter ID (`T.I` format) | `1.2` → Transformer 1, Inverter 2 |
-| 3 | String name | `1.2.5` |
-| 4 | MPPT number | `3` |
+The tool auto-detects headers by scanning rows 26-32 for a row containing `String Name`. Expected columns:
 
-Rows without an inverter ID in column 1 are treated as continuation rows of the current inverter.
+| Header | Content | Example |
+|---|---|---|
+| `Inverter` | Inverter ID in `T.I` format | `1.2` = Transformer 1, Inverter 2 |
+| `String Name` | String identifier | `1.2.5` |
+| `MPPT` | MPPT channel number | `3` |
+| `Section` | Cable cross-section | `1x6` |
+| `Module Type` | Panel power in Wp | `625` |
+| `Posizione Stringa` | Tracker/table position | `Table 3` |
+
+An optional second sheet named **`Inverter To String`** provides cable routing lengths:
+
+| Column | Content |
+|---|---|
+| 1 | String name |
+| 2 | L+ length (m) |
+| 3 | L- length (m) |
+| 5 | Table/position reference |
 
 ---
 
 ## Output
 
-- One **DXF model-space** containing all inverter sections for all transformers
-- One **A3 landscape paper-space layout** per transformer (`Tx1`, `Tx2`, …), auto-scaled to fit the full inverter row
-- **A176 LAB logo** placed in the top-right corner of each layout (28 × 28 mm)
-- Labels generated per inverter section:
+- One DXF model-space with all inverter sections grouped by transformer
+- One A3 landscape paper-space layout per transformer (`Tx1`, `Tx2`, ...), auto-scaled
+- Labels per inverter:
 
-  | Label | Example |
-  |-------|---------|
-  | Inverter title | `INVERTER 2.4 - Huawei SUN2000-330KTL - P= 350 KWp - P= 320 KWac @40°C` |
-  | Cabin header | `CABIN 2` *(+ transformer power if supplied)* |
-  | Cabin label | `Cabin Tx.2 / Inverter 2.4` |
-  | String label | `String 2.4.7 - 20× JA Solar JAM72S20-460 460Wp` |
-  | Unused slot | `reserve` |
+| Label | Example |
+|---|---|
+| Inverter title | `INVERTER 2.4 - Sungrow SG350HX - P= 350 KWp - P= 320 KWac @40C` |
+| Cabin header | `CABIN 2` |
+| String label | `String 2.4.7 - 28x JA Solar JAM72D42-625/LB 625Wp` |
+| Unused slot | `reserve` |
+
+---
+
+## Template DXF Requirements
+
+The template DXF must contain a stamped **Inverter 1.1** block in the Y-band `159400 - 168000` drawing units (auto-detected from the `INVERTER 1.1 ... P= ...` MTEXT anchor) with:
+
+- `MTEXT` matching `INVERTER 1.1 ... P= ...` - inverter title placeholder
+- `MTEXT` matching `CABIN \d+` - cabin header placeholder
+- `MTEXT` matching `Cabin Tx.\d+ ... Inverter` - cabin label placeholder
+- Port labels in `N-M` format - maps to MPPT/port positions
+- String labels `String \d+.\d+.\d+` - stamped with actual string names
+
+All other geometry (lines, polylines, arcs, circles, inserts) is copied verbatim for each inverter.
+
+To re-extract template geometry from a new master DXF:
+
+```bash
+cd code
+python extract_template.py
+```
+
+Update `DXF_PATH` inside `extract_template.py` to point to your template before running.
+
+---
+
+## Building the EXE
+
+```bash
+cd code
+pip install pyinstaller
+pyinstaller A176LAB_SLD_Generator.spec
+```
+
+The compiled executable is written to `code/dist/`.
 
 ---
 
@@ -138,63 +197,27 @@ Rows without an inverter ID in column 1 are treated as continuation rows of the 
 
 ```
 SLD Diagram/
-├── code/
-│   ├── sld_gui_v4.py        # GUI application (latest entry point)
-│   ├── extract_template.py  # Script to extract template DXF geometry to JSON
-│   ├── template_data.json   # Internal template geometry data loaded by GUI
-│   ├── generate_sld.py      # Original CLI script (standalone, no GUI)
-│   └── logoA176LAB.jpg      # A176 LAB logo
-├── YANEL/
-│   ├── 26S001_2E103 - DC Single Line Diagram.dxf   # Template DXF (stamp source)
-│   └── Yanel - Lista Cavi - Cavi LV-DC.xlsx
-├── Example/
-│   ├── generate_sld.py      # Example project version
-│   └── Eaton Socon - Lista Cavi - Cavi LV-DC.xlsx
-├── 2025.017 - PV WYMONDLEY/
-│   └── Priory Farm - Lista Cavi - Cavi LV-DC.xlsx
-├── .gitignore
-└── README.md
++-- code/
+|   +-- smart_sld_generator.py   # Main engine - CLI + GUI (production)
+|   +-- sld_gui_v7.py            # Standalone tkinter GUI (alternative)
+|   +-- extract_template.py      # One-time utility: DXF geometry -> JSON
+|   +-- old/                     # Archived previous versions (gitignored)
++-- webapp/                      # Docker web application
+|   +-- app.py                   # Flask server
+|   +-- sld_core.py              # Engine wrapper
+|   +-- templates/index.html     # Browser UI
+|   +-- code/                    # Copy of smart_sld_generator.py
+|   +-- template/                # Mount your template.dxf here
+|   +-- Dockerfile
+|   +-- docker-compose.yml
+|   +-- requirements.txt
+|   +-- README.md
++-- .gitignore
++-- README.md
 ```
-
-> **Large binary files** (template DXF, generated DXFs, Excel cable lists) are excluded from version control via `.gitignore`.  
-> For the template DXF, use [Git LFS](https://git-lfs.com): `git lfs track "*.dxf"`.
-
----
-
-## Auto-Calculate DC Power
-
-Set **DC Power per Inverter** to `0` and fill in:
-- Panel Power (Wp)
-- Panels per String
-
-The tool counts the total strings assigned to each inverter from the Excel file and computes:
-
-```
-DC power (KWp) = total_strings × panels_per_string × panel_power_Wp / 1000
-```
-
-This produces a unique per-inverter DC value if inverters have different string counts.
-
----
-
-## Template DXF & Extract Requirements
-
-The template geometry is loaded internally from `code/template_data.json`. If you need to update it from a new master DXF template:
-1. Update `DXF_PATH` in `code/extract_template.py` to point to your new DXF template.
-2. Run `python extract_template.py` to regenerate `template_data.json`.
-
-The master DXF template must contain **Inverter 1.1** in the Y-band `159 400 – 168 000` drawing units with:
-
-- `MTEXT` matching `INVERTER 1.1 … P= …` → used as the inverter title template
-- `MTEXT` matching `CABIN \d+` → used as the cabin header template
-- `MTEXT` matching `Cabin Tx.\d+ … Inverter` → used as the cabin label template
-- Port labels in `N-M` format → mapped to MPPT/port positions
-- String labels `String \d+\.\d+\.\d+` → stamped with actual string names
-
-All other geometry (lines, polylines, arcs, circles, inserts) is copied verbatim.
 
 ---
 
 ## Credits
 
-Developed by **Muhammad Abbasi** — Data Scientist and Automation Engineer at *A176 LAB*  
+Developed by **Muhammad Abbasi** - Data Scientist and Automation Engineer at *A176 LAB*
