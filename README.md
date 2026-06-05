@@ -1,4 +1,4 @@
-# A176LAB - DC Single Line Diagram Generator
+# DC Single Line Diagram Generator
 
 **Automatically generate DC Single Line Diagram (SLD) DXF files** for utility-scale solar PV plants from an Excel cable schedule.
 
