@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  sld-auto:
+    build: .
+    container_name: sld-auto
+    ports:
+      - "8080:5000"        # http://localhost:8080
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Override template path if needed:
+      # - TEMPLATE_DXF=/app/template/your_file.dxf
+    volumes:
+      - ./template:/app/template:ro
