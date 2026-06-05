@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>A176LAB - SLD Generator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Inline inverter/panel data from Flask -->
+  <script id="inverter-powers" type="application/json">{{ inverter_powers | safe }}</script>
+  <script id="panel-presets"   type="application/json">{{ panel_presets   | safe }}</script>
+
+  <style>
+    .log-line { white-space: pre-wrap; word-break: break-all; }
+    .file-drop:hover  { border-color: #1A73E8; background: #f0f7ff; }
+    .file-drop.active { border-color: #1A73E8; background: #e8f1fd; }
+    input[type=file]  { display: none; }
+  </style>
+</head>
+
+<body class="min-h-screen bg-gray-50 text-gray-800">
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header class="bg-blue-600 text-white shadow-md">
+    <div class="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div>
+        <h1 class="text-xl font-bold tracking-tight">A176LAB - Generatore Smart SLD DC</h1>
+        <p class="text-blue-200 text-sm mt-0.5">
+          DC Single Line Diagram - automatic generation from Excel cable schedule
+        </p>
+      </div>
+      <span class="text-blue-300 text-xs font-mono hidden sm:block">v7 · webapp</span>
+    </div>
+  </header>
+
+  <!-- ── Main ────────────────────────────────────────────────────────────── -->
+  <main class="max-w-4xl mx-auto px-4 py-6 space-y-5">
+
+    <!-- 1. Files -->
+    <section class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <h2 class="px-6 py-3 bg-gray-50 border-b border-gray-200 text-blue-600 font-semibold text-sm uppercase tracking-wide">
+        1 · Input Files
+      </h2>
+      <div class="px-6 py-5">
+        <label class="block text-sm font-medium mb-1">
+          Excel Cable Schedule <span class="text-red-500">*</span>
+        </label>
+        <div id="excel-drop"
+             class="file-drop border-2 border-dashed border-gray-300 rounded-lg p-5 text-center cursor-pointer transition"
+             onclick="document.getElementById('excel_file').click()"
+             ondragover="handleDragOver(event,'excel-drop')"
+             ondragleave="handleDragLeave('excel-drop')"
+             ondrop="handleDrop(event,'excel_file','excel-name','excel-drop')">
+          <svg class="w-8 h-8 mx-auto text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+          <p id="excel-name" class="text-sm text-gray-500">Click or drag .xlsx / .xls</p>
+        </div>
+        <input type="file" id="excel_file" name="excel_file" accept=".xlsx,.xls"
+               onchange="updateFileName('excel_file','excel-name')">
+      </div>
+    </section>
+
+    <!-- 2. PV System -->
+    <section class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <h2 class="px-6 py-3 bg-gray-50 border-b border-gray-200 text-blue-600 font-semibold text-sm uppercase tracking-wide">
+        2 · PV System Configuration
+      </h2>
+      <div class="px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Panel Model</label>
+          <input type="text" id="panel_model" name="panel_model" list="panel-list"
+                 placeholder="e.g. JA Solar JAM72D42-625/LB"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <datalist id="panel-list"></datalist>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Panels per String</label>
+          <input type="number" id="panels_per_string" name="panels_per_string"
+                 value="28" min="0" max="200"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div class="sm:col-span-2">
+          <label class="block text-sm font-medium mb-1">Inverter Model <span class="text-gray-400 font-normal text-xs">(auto-fills DC/AC power)</span></label>
+          <input type="text" id="inverter_model" name="inverter_model" list="inverter-list"
+                 placeholder="e.g. Sungrow SG350HX"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <datalist id="inverter-list"></datalist>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">DC Power (KWp)</label>
+          <input type="number" id="dc_power_kwp" name="dc_power_kwp"
+                 value="350" step="any"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">AC Power (KWac)</label>
+          <input type="number" id="ac_power_kwac" name="ac_power_kwac"
+                 value="320" step="any"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Temperature Rating (°C)</label>
+          <input type="number" id="temp_rating" name="temp_rating"
+                 value="40" step="any"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Transformer Power</label>
+          <input type="text" id="transformer_power" name="transformer_power"
+                 placeholder="e.g. 2500 kVA"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 3. Options -->
+    <section class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <h2 class="px-6 py-3 bg-gray-50 border-b border-gray-200 text-blue-600 font-semibold text-sm uppercase tracking-wide">
+        3 · Display Options
+      </h2>
+      <div class="px-6 py-5 space-y-3">
+        <label class="flex items-center gap-3 cursor-pointer select-none">
+          <input type="checkbox" id="show_cable_info" name="show_cable_info"
+                 class="w-4 h-4 accent-blue-600 rounded">
+          <span class="text-sm">Show cable lengths in string labels (L+, L−, section)</span>
+        </label>
+        <label class="flex items-center gap-3 cursor-pointer select-none">
+          <input type="checkbox" id="hide_string_details" name="hide_string_details"
+                 checked class="w-4 h-4 accent-blue-600 rounded">
+          <span class="text-sm">Hide panel count / model from string labels</span>
+        </label>
+        <label class="flex items-center gap-3 cursor-pointer select-none">
+          <input type="checkbox" id="show_annot_circle" name="show_annot_circle"
+                 checked class="w-4 h-4 accent-blue-600 rounded">
+          <span class="text-sm">Show large annotation circle</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- 4. Advanced (collapsible) -->
+    <section class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <button type="button" id="adv-btn" onclick="toggleAdvanced()"
+              class="w-full text-left px-6 py-3 bg-gray-50 border-b border-gray-200 text-blue-600 font-semibold text-sm uppercase tracking-wide flex items-center justify-between hover:bg-gray-100 transition">
+        4 · Advanced Settings
+        <span id="adv-arrow" class="text-gray-400 text-xs font-normal normal-case tracking-normal">▶ expand</span>
+      </button>
+      <div id="advanced-section" class="hidden px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Column Spacing</label>
+          <input type="number" id="col_spacing" name="col_spacing"
+                 value="{{ col_spacing_default }}" step="any"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Row Spacing</label>
+          <input type="number" id="row_spacing" name="row_spacing"
+                 value="{{ row_spacing_default }}" step="any"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Circle Radius</label>
+          <input type="number" id="circle_radius" name="circle_radius"
+                 value="24.59" step="any"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Text Size</label>
+          <input type="number" id="text_size" name="text_size"
+                 value="60.44" step="any"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Heavy Section</label>
+          <input type="text" id="heavy_section" name="heavy_section" value="1x10"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Heavy Linetype</label>
+          <input type="text" id="heavy_linetype" name="heavy_linetype" value="TRATTEGGIATA"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Heavy Color (AutoCAD index)</label>
+          <input type="number" id="heavy_color" name="heavy_color" value="40"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Heavy Layer</label>
+          <input type="text" id="heavy_layer" name="heavy_layer" value="TRATTEGGIATA"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Log panel (shown once generation starts) -->
+    <section id="log-section" class="hidden bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div class="px-6 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+        <span id="log-title" class="text-blue-600 font-semibold text-sm uppercase tracking-wide">Generation Log</span>
+        <button onclick="clearLog()" class="text-xs text-gray-400 hover:text-gray-600 transition">Clear</button>
+      </div>
+      <div id="log-box"
+           class="px-6 py-4 font-mono text-xs leading-5 text-gray-700 h-56 overflow-y-auto bg-gray-950 text-green-300">
+      </div>
+    </section>
+
+    <!-- Generate button -->
+    <button id="generate-btn" type="button" onclick="startGeneration()"
+            class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed
+                   text-white rounded-xl py-3.5 text-base font-semibold transition-colors shadow-sm">
+      ▶&nbsp; Esegui Generazione
+    </button>
+
+    <!-- Download button (hidden until done) -->
+    <a id="download-btn" href="#"
+       class="hidden w-full text-center bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl
+              py-3.5 text-base font-semibold transition-colors shadow-sm block">
+      ↓&nbsp; Download SLD_Generated.dxf
+    </a>
+
+  </main>
+
+  <!-- ── JavaScript ────────────────────────────────────────────────────────── -->
+  <script>
+    // ── Bootstrap data from server ──────────────────────────────────────────
+    const inverterPowers = JSON.parse(document.getElementById('inverter-powers').textContent);
+    const panelPresets   = JSON.parse(document.getElementById('panel-presets').textContent);
+
+    // Populate <datalist> for inverter model
+    const inverterList = document.getElementById('inverter-list');
+    Object.keys(inverterPowers).forEach(m => {
+      const opt = document.createElement('option'); opt.value = m; inverterList.appendChild(opt);
+    });
+
+    // Populate <datalist> for panel model
+    const panelList = document.getElementById('panel-list');
+    panelPresets.forEach(m => {
+      const opt = document.createElement('option'); opt.value = m; panelList.appendChild(opt);
+    });
+
+    // Auto-fill DC/AC power when inverter model is chosen
+    document.getElementById('inverter_model').addEventListener('change', function () {
+      const powers = inverterPowers[this.value];
+      if (powers) {
+        document.getElementById('dc_power_kwp').value  = powers[0];
+        document.getElementById('ac_power_kwac').value = powers[1];
+      }
+    });
+
+    // ── File upload helpers ─────────────────────────────────────────────────
+    function updateFileName(inputId, labelId) {
+      const f = document.getElementById(inputId).files[0];
+      const lbl = document.getElementById(labelId);
+      if (f) {
+        lbl.textContent = '📄 ' + f.name;
+        lbl.classList.remove('text-gray-500');
+        lbl.classList.add('text-blue-600', 'font-medium');
+      }
+    }
+
+    function handleDragOver(e, dropId) {
+      e.preventDefault();
+      document.getElementById(dropId).classList.add('active');
+    }
+    function handleDragLeave(dropId) {
+      document.getElementById(dropId).classList.remove('active');
+    }
+    function handleDrop(e, inputId, labelId, dropId) {
+      e.preventDefault();
+      document.getElementById(dropId).classList.remove('active');
+      const dt = e.dataTransfer;
+      if (dt.files && dt.files.length) {
+        const input = document.getElementById(inputId);
+        // Assign the dropped file via DataTransfer
+        const transfer = new DataTransfer();
+        transfer.items.add(dt.files[0]);
+        input.files = transfer.files;
+        updateFileName(inputId, labelId);
+      }
+    }
+
+    // ── Advanced section toggle ─────────────────────────────────────────────
+    function toggleAdvanced() {
+      const sec   = document.getElementById('advanced-section');
+      const arrow = document.getElementById('adv-arrow');
+      const shown = !sec.classList.contains('hidden');
+      sec.classList.toggle('hidden', shown);
+      arrow.textContent = shown ? '▶ expand' : '▼ collapse';
+    }
+
+    // ── Log helpers ─────────────────────────────────────────────────────────
+    function appendLog(text, extraClass) {
+      const box  = document.getElementById('log-box');
+      const line = document.createElement('div');
+      line.className = 'log-line' + (extraClass ? ' ' + extraClass : '');
+      line.textContent = text;
+      box.appendChild(line);
+      box.scrollTop = box.scrollHeight;
+    }
+    function clearLog() { document.getElementById('log-box').innerHTML = ''; }
+
+    // ── Main generation flow ────────────────────────────────────────────────
+    let currentES = null;
+
+    async function startGeneration() {
+      const excelFile = document.getElementById('excel_file').files[0];
+
+      if (!excelFile) {
+        alert('Please select an Excel cable schedule file.');
+        return;
+      }
+
+      // Reset UI
+      document.getElementById('log-section').classList.remove('hidden');
+      document.getElementById('download-btn').classList.add('hidden');
+      clearLog();
+      setGenerateState(true);
+      appendLog('Uploading file and starting generation…');
+
+      // Build FormData
+      const fd = new FormData();
+      fd.append('excel_file', excelFile);
+
+      [
+        'panel_model','panels_per_string','inverter_model','dc_power_kwp',
+        'ac_power_kwac','temp_rating','transformer_power','col_spacing','row_spacing',
+        'circle_radius','text_size','heavy_section','heavy_linetype','heavy_color','heavy_layer'
+      ].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) fd.append(id, el.value);
+      });
+
+      fd.append('show_cable_info',     document.getElementById('show_cable_info').checked     ? 'true' : 'false');
+      fd.append('hide_string_details', document.getElementById('hide_string_details').checked ? 'true' : 'false');
+      fd.append('show_annot_circle',   document.getElementById('show_annot_circle').checked   ? 'true' : 'false');
+
+      let jobId;
+      try {
+        const resp = await fetch('/generate', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (data.error) {
+          appendLog('Error: ' + data.error, 'text-red-400 font-semibold');
+          setGenerateState(false);
+          return;
+        }
+        jobId = data.job_id;
+      } catch (e) {
+        appendLog('Network error: ' + e.message, 'text-red-400 font-semibold');
+        setGenerateState(false);
+        return;
+      }
+
+      // Open SSE stream
+      if (currentES) currentES.close();
+      currentES = new EventSource(`/stream/${jobId}`);
+
+      currentES.onmessage = function (e) {
+        let msg;
+        try { msg = JSON.parse(e.data); } catch { return; }
+
+        if (msg.type === 'log') {
+          appendLog(msg.msg);
+        } else if (msg.type === 'done') {
+          appendLog('✓ ' + msg.msg, 'text-emerald-400 font-semibold');
+          currentES.close();
+          showDownload(jobId);
+          setGenerateState(false);
+        } else if (msg.type === 'error') {
+          appendLog('✗ ' + msg.msg, 'text-red-400 font-semibold');
+          currentES.close();
+          setGenerateState(false);
+        } else if (msg.type === 'sentinel') {
+          currentES.close();
+          setGenerateState(false);
+        }
+        // heartbeat - silently ignored
+      };
+
+      currentES.onerror = function () {
+        appendLog('[SSE connection closed]', 'text-gray-500 italic');
+        currentES.close();
+        setGenerateState(false);
+      };
+    }
+
+    function showDownload(jobId) {
+      const btn = document.getElementById('download-btn');
+      btn.href = `/download/${jobId}`;
+      btn.classList.remove('hidden');
+    }
+
+    function setGenerateState(running) {
+      const btn = document.getElementById('generate-btn');
+      btn.disabled = running;
+      btn.textContent = running ? '⏳  Generating…' : '▶  Esegui Generazione';
+    }
+  </script>
+</body>
+</html>
