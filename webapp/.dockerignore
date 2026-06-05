@@ -1,0 +1,41 @@
+# ==============================================================================
+# .dockerignore - webapp Docker build context
+# Build context is the webapp/ directory (set in docker-compose.yml)
+# ==============================================================================
+
+# Git metadata
+.git
+.gitignore
+
+# Docker files (not needed inside the image)
+Dockerfile
+docker-compose.yml
+
+# Documentation
+*.md
+*.txt
+*.html
+
+# Template DXF - mounted as a read-only volume at runtime, never baked in
+template/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
