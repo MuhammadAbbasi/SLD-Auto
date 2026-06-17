@@ -121,7 +121,14 @@ See [webapp/README.md](webapp/README.md) for Docker deployment instructions.
 
 The workbook must contain a sheet named **`2E802-3`** (case-insensitive).
 
-The tool auto-detects headers by scanning rows 26-32 for a row containing `String Name`. Expected columns:
+### Column detection
+
+The tool auto-detects headers by scanning rows 26-32 for a row containing `String Name`, then maps each column by its header name. **Columns can be in any order** - the tool adapts automatically regardless of their position.
+
+Constraints:
+- Headers must be within the first 34 columns (up to column AH)
+- Header names must match exactly as shown below (case-insensitive for most)
+- If no header row is found, the tool falls back to fixed default positions and prints a warning in the log
 
 | Header | Content | Example |
 |---|---|---|
