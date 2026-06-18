@@ -767,37 +767,61 @@ def generate(cfg, log_cb=print):
                 break
 
     # Renumber right-side module box integer labels when panels_per_string differs
-    # from the template default.  The template shows a left group (1, 2, …, N_left)
-    # and a right group (…, template_panels-6, …, template_panels) with "…" in the
-    # middle.  Only the right group is shifted by delta so the last visible box
-    # always shows panels_per_string.
-    # Example: template=28, target=26, delta=2 → "28"→"26", "27"→"25", "22"→"20"
-    if panels_per_string > 0 and _template_panels != panels_per_string:
+    # from the template default.  Box numbers may live in modelspace MTEXT *or*
+    # inside INSERT block definitions (TEXT/MTEXT) - both are updated here.
+    # Only the right-side group (beyond the consecutive left run 1..N_left) is
+    # shifted so the last visible box always shows panels_per_string.
+    # Example: template=28, target=26, delta=2 -> "28"->"26", "27"->"25", "22"->"20"
+    if panels_per_string > 0 and _template_panels > 0 and _template_panels != panels_per_string:
         _delta = _template_panels - panels_per_string
-        # Find the boundary between left and right groups: the left group is a
-        # consecutive run starting at 1; the first gap marks where the "…" begins.
-        _int_labels = sorted(
-            int(_strip_mtext_fmt(_d['text']).strip())
-            for _d in tmpl_texts
-            if _d.get('cls') == 'fixed'
-            and _strip_mtext_fmt(_d['text']).strip().isdigit()
-        )
-        _left_max = 0
-        for _n in _int_labels:
-            if _n == _left_max + 1:
-                _left_max = _n
-            else:
-                break  # gap found - right group starts here
-        # Shift every right-group label by -delta
+        # Collect all integer labels in range [1, _template_panels] from both
+        # modelspace MTEXT and block definitions to find the left/right boundary.
+        _all_int_lbl = set()
         for _d in tmpl_texts:
             if _d.get('cls') == 'fixed':
                 _s = _strip_mtext_fmt(_d['text']).strip()
-                if _s.isdigit() and int(_s) > _left_max:
-                    _new_n = int(_s) - _delta
-                    _d['text'] = re.sub(r'\b' + re.escape(_s) + r'\b', str(_new_n), _d['text'])
-        if _delta != 0:
+                if _s.isdigit() and 1 <= int(_s) <= _template_panels:
+                    _all_int_lbl.add(int(_s))
+        for _blk in doc.blocks:
+            for _e in _blk:
+                if _e.dxftype() in ('TEXT', 'MTEXT'):
+                    _raw = _e.dxf.text if _e.dxftype() == 'TEXT' else _e.text
+                    _rs = _raw.strip()
+                    if _rs.isdigit() and 1 <= int(_rs) <= _template_panels:
+                        _all_int_lbl.add(int(_rs))
+        # Left group = consecutive run from 1; first gap = start of right group
+        _left_max = 0
+        for _n in sorted(_all_int_lbl):
+            if _n == _left_max + 1:
+                _left_max = _n
+            else:
+                break
+
+        if _delta != 0 and _left_max > 0:
+            # Shift right-group MTEXT labels extracted into tmpl (modelspace)
+            for _d in tmpl_texts:
+                if _d.get('cls') == 'fixed':
+                    _s = _strip_mtext_fmt(_d['text']).strip()
+                    if _s.isdigit() and _left_max < int(_s) <= _template_panels:
+                        _new_n = int(_s) - _delta
+                        _d['text'] = re.sub(r'\b' + re.escape(_s) + r'\b', str(_new_n), _d['text'])
+            # Shift right-group TEXT/MTEXT labels inside block definitions
+            _blk_count = 0
+            for _blk in doc.blocks:
+                for _e in _blk:
+                    if _e.dxftype() in ('TEXT', 'MTEXT'):
+                        _raw = _e.dxf.text if _e.dxftype() == 'TEXT' else _e.text
+                        _rs = _raw.strip()
+                        if _rs.isdigit() and _left_max < int(_rs) <= _template_panels:
+                            _new_n = int(_rs) - _delta
+                            if _e.dxftype() == 'TEXT':
+                                _e.dxf.text = str(_new_n)
+                            else:
+                                _e.text = re.sub(r'\b' + re.escape(_rs) + r'\b', str(_new_n), _e.text)
+                            _blk_count += 1
             print(f"  Renumbered right-side box labels by {-_delta:+d} "
-                  f"(template={_template_panels}, target={panels_per_string}, left_group=1-{_left_max})")
+                  f"(template={_template_panels}, target={panels_per_string}, "
+                  f"left_group=1-{_left_max}, block_entities={_blk_count})")
 
     # Map MPPT channels to their label locations
     port_lbl = [(m['x'], m['y'], _strip_mtext_fmt(m['text']))
