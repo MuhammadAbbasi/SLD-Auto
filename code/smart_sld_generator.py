@@ -661,7 +661,32 @@ def generate(cfg, log_cb=print):
     # ── 2. Load template DXF ──────────────────────────────────────────────────
     print(f"Loading template DXF: {TEMPLATE_DXF}")
     doc = _ez.readfile(TEMPLATE_DXF)
-    
+
+    # Read the template's original module count BEFORE any block modifications.
+    # The "N PV modules in series" text is inside a block definition (not the
+    # modelspace), so it must be read here - after the block update it shows the
+    # new count and can no longer be used to recover the original.
+    _template_panels_orig = 0
+    for _blk in doc.blocks:
+        for _e in _blk:
+            if _e.dxftype() in ('TEXT', 'MTEXT'):
+                _raw = _e.dxf.text if _e.dxftype() == 'TEXT' else _e.text
+                if re.search(r'PV modules?', _raw, re.I):
+                    _tm = re.search(r'(\d+)', _raw) or re.search(r'(\d+)', _strip_mtext_fmt(_raw))
+                    if _tm:
+                        _template_panels_orig = int(_tm.group(1))
+        if _template_panels_orig > 0:
+            break
+    if _template_panels_orig == 0:
+        for _e in doc.modelspace():
+            if _e.dxftype() == 'MTEXT' and re.search(r'PV modules?', _e.text, re.I):
+                _tm = re.search(r'(\d+)', _e.text) or re.search(r'(\d+)', _strip_mtext_fmt(_e.text))
+                if _tm:
+                    _template_panels_orig = int(_tm.group(1))
+                    break
+    if _template_panels_orig > 0:
+        print(f"  Template module count detected: {_template_panels_orig}")
+
     # Update block definitions with the custom panel model/count
     replaced_blocks_count = 0
     for blk in doc.blocks:
@@ -756,15 +781,17 @@ def generate(cfg, log_cb=print):
             d['cls'] = _classify_mtext(d['text'])
             tmpl_texts.append(d)
 
-    # Read the template's original module count so right-side box labels can be renumbered
-    _template_panels = 0
-    _pc_d = next((m for m in tmpl_texts if m['cls'] == 'panel_count'), None)
-    if _pc_d:
-        for _src in (_pc_d['text'], _strip_mtext_fmt(_pc_d['text'])):
-            _tm = re.search(r'(\d+)', _src)
-            if _tm:
-                _template_panels = int(_tm.group(1))
-                break
+    # Use the original module count captured before block definitions were updated.
+    # Fallback to tmpl_texts only if the panel_count entity was in the modelspace.
+    _template_panels = _template_panels_orig
+    if _template_panels == 0:
+        _pc_d = next((m for m in tmpl_texts if m['cls'] == 'panel_count'), None)
+        if _pc_d:
+            for _src in (_pc_d['text'], _strip_mtext_fmt(_pc_d['text'])):
+                _tm = re.search(r'(\d+)', _src)
+                if _tm:
+                    _template_panels = int(_tm.group(1))
+                    break
 
     # Renumber right-side module box integer labels when panels_per_string differs
     # from the template default.  Box numbers may live in modelspace MTEXT *or*
