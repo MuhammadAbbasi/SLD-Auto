@@ -274,7 +274,7 @@ def _classify_mtext(txt):
         return 'cabin_label'
     if re.match(r'^CABIN \d+$', c):
         return 'cabin_header'
-    if re.search(r'\bPV modules?\b', txt, re.I):
+    if re.search(r'PV modules?', txt, re.I):
         return 'panel_count'
     if STRING_RE.search(txt) or c == 'reserve':
         return 'string_label'
@@ -284,10 +284,24 @@ def _classify_mtext(txt):
 def _update_panel_count_label(text_val, panels_per_string, panel_model):
     updated = text_val
     if panels_per_string > 0:
-        updated = re.sub(
+        new = re.sub(
             r'\d+(\s*PV modules?)',
             lambda m: f'{panels_per_string}{m.group(1)}',
             updated, flags=re.I)
+        if new != updated:
+            updated = new
+        else:
+            # Fallback: MTEXT codes (e.g. \P paragraph break, closing brace) may sit
+            # between the panel count number and the "PV modules" text.
+            # Find "PV modules" then replace the last number that precedes it.
+            pv_m = re.search(r'PV modules?', updated, re.I)
+            if pv_m:
+                before = updated[:pv_m.start()]
+                num_matches = list(re.finditer(r'\d+', before))
+                if num_matches:
+                    last = num_matches[-1]
+                    updated = (before[:last.start()] + str(panels_per_string)
+                               + before[last.end():] + updated[pv_m.start():])
     
     if panel_model:
         idx_series = updated.lower().find('series')
@@ -654,12 +668,12 @@ def generate(cfg, log_cb=print):
         for e in blk:
             if e.dxftype() == 'MTEXT':
                 text_val = e.text
-                if re.search(r'\bPV modules?\b', text_val, re.I):
+                if re.search(r'PV modules?', text_val, re.I):
                     e.text = _update_panel_count_label(text_val, panels_per_string, panel_model)
                     replaced_blocks_count += 1
             elif e.dxftype() == 'TEXT':
                 text_val = e.dxf.text
-                if re.search(r'\bPV modules?\b', text_val, re.I):
+                if re.search(r'PV modules?', text_val, re.I):
                     e.dxf.text = _update_panel_count_label(text_val, panels_per_string, panel_model)
                     replaced_blocks_count += 1
     if replaced_blocks_count > 0:
@@ -2051,7 +2065,7 @@ def build_parser():
     p.add_argument('--template', help="Path to the template DXF file")
     p.add_argument('--excel', help="Path to the Excel cable schedule")
     p.add_argument('--out', help="Path to save the generated DXF file (defaults to <excel_name>_SLD_Generated.dxf)")
-    p.add_argument('--panels', default='28', help="Panels per string (default: 28)")
+    p.add_argument('--panels', default='26', help="Panels per string (default: 28)")
     p.add_argument('--panel-model', default='', help="Solar panel model name (default: '')")
     p.add_argument('--inv-model', default='Sungrow SG350HX', help="Inverter model name (default: 'Sungrow SG350HX')")
     p.add_argument('--dc-power', default='350', help="Inverter DC power rating in KWp (default: '350')")
