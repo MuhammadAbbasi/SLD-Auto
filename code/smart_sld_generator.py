@@ -756,7 +756,7 @@ def generate(cfg, log_cb=print):
             d['cls'] = _classify_mtext(d['text'])
             tmpl_texts.append(d)
 
-    # Read the template's original module count so excess boxes can be removed
+    # Read the template's original module count so right-side box labels can be renumbered
     _template_panels = 0
     _pc_d = next((m for m in tmpl_texts if m['cls'] == 'panel_count'), None)
     if _pc_d:
@@ -766,44 +766,38 @@ def generate(cfg, log_cb=print):
                 _template_panels = int(_tm.group(1))
                 break
 
-    # Mark excess module box rectangles (and their number labels) for skipping.
-    # The template draws a fixed set of boxes (default 28). When panels_per_string
-    # is smaller, we remove the rightmost N boxes by finding the most-common small
-    # closed 4-point LWPOLYLINE size (the box shape) and sorting by X.
-    if panels_per_string > 0 and _template_panels > panels_per_string:
-        _n_skip = _template_panels - panels_per_string
-        _cand = []
-        for _d in tmpl:
-            if _d['type'] == 'LWPOLYLINE' and _d.get('closed') and len(_d.get('pts', [])) == 4:
-                _pts = _d['pts']
-                _xs = [p[0] for p in _pts]
-                _ys = [p[1] for p in _pts]
-                _w = max(_xs) - min(_xs)
-                _h = max(_ys) - min(_ys)
-                if 20 < _w < 3000 and 20 < _h < 1000:
-                    _rw = round(_w / 10) * 10
-                    _rh = round(_h / 10) * 10
-                    _cand.append((_rw, _rh, min(_xs), _d))
-        if _cand:
-            _sz = {}
-            for _rw, _rh, _, _ in _cand:
-                _sz[(_rw, _rh)] = _sz.get((_rw, _rh), 0) + 1
-            _mw, _mh = max(_sz, key=_sz.get)
-            _boxes = sorted(
-                [(_x, _d) for _rw, _rh, _x, _d in _cand if _rw == _mw and _rh == _mh],
-                key=lambda t: t[0]
-            )
-            if len(_boxes) >= _n_skip:
-                for _, _d in _boxes[-_n_skip:]:
-                    _d['_skip_box'] = True
-                print(f"  Marked {_n_skip} excess module box(es) to remove "
-                      f"(template={_template_panels}, target={panels_per_string})")
-        # Skip MTEXT integer labels beyond panels_per_string (box number labels)
+    # Renumber right-side module box integer labels when panels_per_string differs
+    # from the template default.  The template shows a left group (1, 2, …, N_left)
+    # and a right group (…, template_panels-6, …, template_panels) with "…" in the
+    # middle.  Only the right group is shifted by delta so the last visible box
+    # always shows panels_per_string.
+    # Example: template=28, target=26, delta=2 → "28"→"26", "27"→"25", "22"→"20"
+    if panels_per_string > 0 and _template_panels != panels_per_string:
+        _delta = _template_panels - panels_per_string
+        # Find the boundary between left and right groups: the left group is a
+        # consecutive run starting at 1; the first gap marks where the "…" begins.
+        _int_labels = sorted(
+            int(_strip_mtext_fmt(_d['text']).strip())
+            for _d in tmpl_texts
+            if _d.get('cls') == 'fixed'
+            and _strip_mtext_fmt(_d['text']).strip().isdigit()
+        )
+        _left_max = 0
+        for _n in _int_labels:
+            if _n == _left_max + 1:
+                _left_max = _n
+            else:
+                break  # gap found - right group starts here
+        # Shift every right-group label by -delta
         for _d in tmpl_texts:
             if _d.get('cls') == 'fixed':
                 _s = _strip_mtext_fmt(_d['text']).strip()
-                if _s.isdigit() and int(_s) > panels_per_string:
-                    _d['_skip_box'] = True
+                if _s.isdigit() and int(_s) > _left_max:
+                    _new_n = int(_s) - _delta
+                    _d['text'] = re.sub(r'\b' + re.escape(_s) + r'\b', str(_new_n), _d['text'])
+        if _delta != 0:
+            print(f"  Renumbered right-side box labels by {-_delta:+d} "
+                  f"(template={_template_panels}, target={panels_per_string}, left_group=1-{_left_max})")
 
     # Map MPPT channels to their label locations
     port_lbl = [(m['x'], m['y'], _strip_mtext_fmt(m['text']))
@@ -1008,10 +1002,6 @@ def generate(cfg, log_cb=print):
             
             # A. Stamp template slice base geometry
             for d in tmpl:
-                # Skip module boxes/labels that exceed panels_per_string
-                if d.get('_skip_box'):
-                    continue
-
                 # Skip large red annotation circles when option is disabled.
                 # Terminal circles have radius ~24.6; annotation circles are much larger.
                 if (d['type'] == 'CIRCLE' and not show_annot_circle
