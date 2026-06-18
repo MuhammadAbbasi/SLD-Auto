@@ -756,6 +756,55 @@ def generate(cfg, log_cb=print):
             d['cls'] = _classify_mtext(d['text'])
             tmpl_texts.append(d)
 
+    # Read the template's original module count so excess boxes can be removed
+    _template_panels = 0
+    _pc_d = next((m for m in tmpl_texts if m['cls'] == 'panel_count'), None)
+    if _pc_d:
+        for _src in (_pc_d['text'], _strip_mtext_fmt(_pc_d['text'])):
+            _tm = re.search(r'(\d+)', _src)
+            if _tm:
+                _template_panels = int(_tm.group(1))
+                break
+
+    # Mark excess module box rectangles (and their number labels) for skipping.
+    # The template draws a fixed set of boxes (default 28). When panels_per_string
+    # is smaller, we remove the rightmost N boxes by finding the most-common small
+    # closed 4-point LWPOLYLINE size (the box shape) and sorting by X.
+    if panels_per_string > 0 and _template_panels > panels_per_string:
+        _n_skip = _template_panels - panels_per_string
+        _cand = []
+        for _d in tmpl:
+            if _d['type'] == 'LWPOLYLINE' and _d.get('closed') and len(_d.get('pts', [])) == 4:
+                _pts = _d['pts']
+                _xs = [p[0] for p in _pts]
+                _ys = [p[1] for p in _pts]
+                _w = max(_xs) - min(_xs)
+                _h = max(_ys) - min(_ys)
+                if 20 < _w < 3000 and 20 < _h < 1000:
+                    _rw = round(_w / 10) * 10
+                    _rh = round(_h / 10) * 10
+                    _cand.append((_rw, _rh, min(_xs), _d))
+        if _cand:
+            _sz = {}
+            for _rw, _rh, _, _ in _cand:
+                _sz[(_rw, _rh)] = _sz.get((_rw, _rh), 0) + 1
+            _mw, _mh = max(_sz, key=_sz.get)
+            _boxes = sorted(
+                [(_x, _d) for _rw, _rh, _x, _d in _cand if _rw == _mw and _rh == _mh],
+                key=lambda t: t[0]
+            )
+            if len(_boxes) >= _n_skip:
+                for _, _d in _boxes[-_n_skip:]:
+                    _d['_skip_box'] = True
+                print(f"  Marked {_n_skip} excess module box(es) to remove "
+                      f"(template={_template_panels}, target={panels_per_string})")
+        # Skip MTEXT integer labels beyond panels_per_string (box number labels)
+        for _d in tmpl_texts:
+            if _d.get('cls') == 'fixed':
+                _s = _strip_mtext_fmt(_d['text']).strip()
+                if _s.isdigit() and int(_s) > panels_per_string:
+                    _d['_skip_box'] = True
+
     # Map MPPT channels to their label locations
     port_lbl = [(m['x'], m['y'], _strip_mtext_fmt(m['text']))
                 for m in tmpl_texts if PORT_RE.match(_strip_mtext_fmt(m['text']))]
@@ -959,6 +1008,10 @@ def generate(cfg, log_cb=print):
             
             # A. Stamp template slice base geometry
             for d in tmpl:
+                # Skip module boxes/labels that exceed panels_per_string
+                if d.get('_skip_box'):
+                    continue
+
                 # Skip large red annotation circles when option is disabled.
                 # Terminal circles have radius ~24.6; annotation circles are much larger.
                 if (d['type'] == 'CIRCLE' and not show_annot_circle
