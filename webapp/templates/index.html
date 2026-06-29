@@ -77,10 +77,47 @@
           <datalist id="panel-list"></datalist>
         </div>
 
+        <div class="sm:col-span-2" id="panel-models-wrapper">
+          <div class="flex items-center justify-between mb-1">
+            <label class="block text-sm font-medium">
+              Modelli Pannello per Wp
+              <span class="text-gray-400 font-normal text-xs">(auto-detected from Excel)</span>
+            </label>
+            <span id="wp-parse-status" class="text-xs text-gray-400"></span>
+          </div>
+          <div id="wp-rows">
+            <p class="text-xs text-gray-400 italic">Load an Excel file above to detect panel types.</p>
+          </div>
+        </div>
+
         <div>
           <label class="block text-sm font-medium mb-1">Panels per String</label>
           <input type="number" id="panels_per_string" name="panels_per_string"
                  value="28" min="0" max="200"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Strings per MPPT
+            <span class="text-gray-400 font-normal text-xs">(rows drawn per MPPT)</span></label>
+          <input type="number" id="strings_per_mppt" name="strings_per_mppt"
+                 value="2" min="1" max="12"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">MPPTs per DC Switch
+            <span class="text-gray-400 font-normal text-xs">(switch count = MPPTs ÷ this)</span></label>
+          <input type="number" id="mppts_per_switch" name="mppts_per_switch"
+                 value="4" min="1" max="16"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Total MPPTs per Inverter
+            <span class="text-gray-400 font-normal text-xs">(0 = auto from data)</span></label>
+          <input type="number" id="num_mppts_total" name="num_mppts_total"
+                 value="0" min="0" max="64"
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
 
@@ -123,10 +160,51 @@
       </div>
     </section>
 
-    <!-- 3. Options -->
+    <!-- 3. MPPT Input Layout -->
+    <section class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <button type="button" onclick="toggleSection('mppt-layout-body','mppt-layout-arrow')"
+              class="w-full text-left px-6 py-3 bg-gray-50 border-b border-gray-200 text-blue-600 font-semibold text-sm uppercase tracking-wide flex items-center justify-between hover:bg-gray-100 transition">
+        3 · MPPT Input Layout
+        <span id="mppt-layout-arrow" class="text-gray-400 text-xs font-normal normal-case tracking-normal">▶ expand</span>
+      </button>
+      <div id="mppt-layout-body" class="hidden px-6 py-5">
+        <p class="text-sm text-gray-500 mb-3">
+          Click a circle <strong>once</strong> to mark it active (shows priority number within that MPPT),
+          <strong>again</strong> to mark it always reserved&nbsp;<span class="font-mono text-orange-500">R</span>,
+          <strong>again</strong> to clear. Leave all clear to use the default sequential fill.
+        </p>
+        <div class="flex flex-wrap items-center gap-4 mb-4">
+          <label class="flex items-center gap-2 text-sm">
+            <span class="font-medium text-gray-700">MPPTs per inverter:</span>
+            <input type="number" id="num_mppts_layout" value="6" min="1" max="32"
+                   class="w-16 border border-gray-300 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                   oninput="rebuildMpptGrid()">
+          </label>
+          <div class="flex items-center gap-3 text-xs text-gray-500">
+            <span class="flex items-center gap-1.5">
+              <span class="inline-block w-5 h-5 rounded-full bg-blue-500"></span>Active
+            </span>
+            <span class="flex items-center gap-1.5">
+              <span class="inline-block w-5 h-5 rounded-full bg-orange-400"></span>Always reserved
+            </span>
+            <span class="flex items-center gap-1.5">
+              <span class="inline-block w-5 h-5 rounded-full bg-gray-100 border-2 border-dashed border-gray-300"></span>Auto
+            </span>
+          </div>
+          <button type="button" onclick="resetMpptGrid()"
+                  class="ml-auto text-xs text-gray-400 hover:text-red-500 border border-gray-200 hover:border-red-300 rounded-lg px-3 py-1 transition">
+            Reset all
+          </button>
+        </div>
+        <div id="mppt-grid" class="overflow-x-auto pb-1"></div>
+        <input type="hidden" id="mppt_layout" name="mppt_layout">
+      </div>
+    </section>
+
+    <!-- 4. Options -->
     <section class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
       <h2 class="px-6 py-3 bg-gray-50 border-b border-gray-200 text-blue-600 font-semibold text-sm uppercase tracking-wide">
-        3 · Display Options
+        4 · Display Options
       </h2>
       <div class="px-6 py-5 space-y-3">
         <label class="flex items-center gap-3 cursor-pointer select-none">
@@ -151,7 +229,7 @@
     <section class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
       <button type="button" id="adv-btn" onclick="toggleAdvanced()"
               class="w-full text-left px-6 py-3 bg-gray-50 border-b border-gray-200 text-blue-600 font-semibold text-sm uppercase tracking-wide flex items-center justify-between hover:bg-gray-100 transition">
-        4 · Advanced Settings
+        5 · Advanced Settings
         <span id="adv-arrow" class="text-gray-400 text-xs font-normal normal-case tracking-normal">▶ expand</span>
       </button>
       <div id="advanced-section" class="hidden px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -263,9 +341,10 @@
       const f = document.getElementById(inputId).files[0];
       const lbl = document.getElementById(labelId);
       if (f) {
-        lbl.textContent = '📄 ' + f.name;
+        lbl.textContent = '\u{1F4C4} ' + f.name;
         lbl.classList.remove('text-gray-500');
         lbl.classList.add('text-blue-600', 'font-medium');
+        if (inputId === 'excel_file') parseExcel(f);
       }
     }
 
@@ -282,7 +361,6 @@
       const dt = e.dataTransfer;
       if (dt.files && dt.files.length) {
         const input = document.getElementById(inputId);
-        // Assign the dropped file via DataTransfer
         const transfer = new DataTransfer();
         transfer.items.add(dt.files[0]);
         input.files = transfer.files;
@@ -290,14 +368,167 @@
       }
     }
 
-    // ── Advanced section toggle ─────────────────────────────────────────────
-    function toggleAdvanced() {
-      const sec   = document.getElementById('advanced-section');
-      const arrow = document.getElementById('adv-arrow');
+    // ── Parse Excel for distinct Wp values ──────────────────────────────────
+    async function parseExcel(file) {
+      const statusEl = document.getElementById('wp-parse-status');
+      const rowsEl   = document.getElementById('wp-rows');
+
+      statusEl.textContent = 'Parsing…';
+      rowsEl.innerHTML = '<p class="text-xs text-gray-400 italic">Detecting panel types…</p>';
+
+      const fd = new FormData();
+      fd.append('excel_file', file);
+
+      let data;
+      try {
+        const resp = await fetch('/parse-excel', { method: 'POST', body: fd });
+        data = await resp.json();
+      } catch (e) {
+        statusEl.textContent = 'Network error';
+        rowsEl.innerHTML = '<p class="text-xs text-red-400">Could not reach server: ' + e.message + '</p>';
+        return;
+      }
+
+      if (data.error) {
+        statusEl.textContent = 'Parse error';
+        rowsEl.innerHTML = '<p class="text-xs text-red-400">' + data.error + '</p>';
+        return;
+      }
+
+      const wpVals = data.wp_values || [];
+      if (wpVals.length === 0) {
+        statusEl.textContent = 'No Wp found';
+        rowsEl.innerHTML = '<p class="text-xs text-gray-400 italic">No panel Wp values detected in Excel.</p>';
+        return;
+      }
+
+      statusEl.textContent = wpVals.length + ' type(s) detected';
+      const defaultModel = document.getElementById('panel_model').value.trim();
+      rowsEl.innerHTML = '';
+      wpVals.forEach(wp => {
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-2';
+        const prefill = wpVals.length === 1 ? defaultModel : '';
+        row.innerHTML =
+          '<span class="text-sm font-mono text-gray-500 w-20 shrink-0 text-right">' + wp + ' Wp</span>' +
+          '<input type="text"' +
+          '       class="wp-model-input flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"' +
+          '       data-wp="' + wp + '"' +
+          '       placeholder="Model name for ' + wp + ' Wp panels"' +
+          '       value="' + prefill.replace(/"/g, '&quot;') + '">';
+        rowsEl.appendChild(row);
+      });
+    }
+
+    // ── Generic collapsible section toggle ─────────────────────────────────
+    function toggleSection(bodyId, arrowId) {
+      const sec = document.getElementById(bodyId);
+      const arrow = document.getElementById(arrowId);
       const shown = !sec.classList.contains('hidden');
       sec.classList.toggle('hidden', shown);
       arrow.textContent = shown ? '▶ expand' : '▼ collapse';
     }
+
+    // ── Advanced section toggle ─────────────────────────────────────────────
+    function toggleAdvanced() {
+      toggleSection('advanced-section', 'adv-arrow');
+    }
+
+    // ── MPPT Layout Grid ────────────────────────────────────────────────────
+    // mpptState[mi][si]: null = auto, integer = active priority, 'R' = always reserved
+    let mpptState = [];
+
+    function getMpptLayoutCount()  { return Math.max(1, parseInt(document.getElementById('num_mppts_layout').value) || 6); }
+    function getMpptStringCount()  { return Math.max(1, parseInt(document.getElementById('strings_per_mppt').value) || 5); }
+
+    function rebuildMpptGrid() {
+      const nm = getMpptLayoutCount(), ns = getMpptStringCount();
+      while (mpptState.length < nm) mpptState.push([]);
+      mpptState.length = nm;
+      mpptState.forEach((row, mi) => {
+        while (row.length < ns) row.push(null);
+        mpptState[mi] = row.slice(0, ns);
+      });
+      renderMpptGrid();
+      serializeMpptLayout();
+    }
+
+    function renderMpptGrid() {
+      const nm = getMpptLayoutCount(), ns = getMpptStringCount();
+      const grid = document.getElementById('mppt-grid');
+      if (!grid) return;
+      let html = '<table style="border-spacing:6px;border-collapse:separate">';
+      // Column header row
+      html += '<tr><td style="width:70px"></td>';
+      for (let s = 0; s < ns; s++) {
+        html += `<td class="text-center pb-1"><span class="text-xs font-mono text-gray-400">PV${s+1}</span></td>`;
+      }
+      html += '</tr>';
+      // MPPT rows
+      for (let m = 0; m < nm; m++) {
+        html += '<tr>';
+        html += `<td class="text-right pr-2 text-xs font-medium text-gray-500 whitespace-nowrap">MPPT ${m+1}</td>`;
+        for (let s = 0; s < ns; s++) {
+          const st = mpptState[m][s];
+          let cls, lbl;
+          if (st === null) {
+            cls = 'bg-gray-100 border-2 border-dashed border-gray-300 text-gray-300 hover:bg-gray-200 hover:border-gray-400';
+            lbl = '';
+          } else if (st === 'R') {
+            cls = 'bg-orange-100 border-2 border-orange-400 text-orange-500 font-bold hover:bg-orange-200';
+            lbl = 'R';
+          } else {
+            cls = 'bg-blue-500 border-2 border-blue-600 text-white font-bold hover:bg-blue-600';
+            lbl = st;
+          }
+          html += `<td><button type="button" onclick="clickMpptCell(${m},${s})"
+                              title="MPPT ${m+1} · PV${s+1}"
+                              class="w-11 h-11 rounded-full text-sm transition-colors select-none ${cls}">${lbl}</button></td>`;
+        }
+        html += '</tr>';
+      }
+      html += '</table>';
+      grid.innerHTML = html;
+    }
+
+    function clickMpptCell(mi, si) {
+      const cur = mpptState[mi][si];
+      if (cur === null) {
+        // Auto → Active: next sequential priority in this MPPT row
+        const maxP = mpptState[mi].reduce((mx, v) => typeof v === 'number' ? Math.max(mx, v) : mx, 0);
+        mpptState[mi][si] = maxP + 1;
+      } else if (typeof cur === 'number') {
+        // Active → Reserve (compact priority numbers for remaining active slots)
+        const removed = cur;
+        mpptState[mi][si] = 'R';
+        mpptState[mi] = mpptState[mi].map(v => typeof v === 'number' && v > removed ? v - 1 : v);
+      } else {
+        // Reserve → Auto
+        mpptState[mi][si] = null;
+      }
+      renderMpptGrid();
+      serializeMpptLayout();
+    }
+
+    function resetMpptGrid() {
+      mpptState = mpptState.map(row => row.map(() => null));
+      renderMpptGrid();
+      serializeMpptLayout();
+    }
+
+    function serializeMpptLayout() {
+      const hasAny = mpptState.some(row => row.some(v => v !== null));
+      const el = document.getElementById('mppt_layout');
+      if (!el) return;
+      if (!hasAny) { el.value = ''; return; }
+      const obj = {};
+      mpptState.forEach((row, mi) => { obj[mi + 1] = row; });
+      el.value = JSON.stringify(obj);
+    }
+
+    // Initialize grid and keep it in sync with Strings per MPPT field
+    rebuildMpptGrid();
+    document.getElementById('strings_per_mppt').addEventListener('input', rebuildMpptGrid);
 
     // ── Log helpers ─────────────────────────────────────────────────────────
     function appendLog(text, extraClass) {
@@ -333,13 +564,23 @@
       fd.append('excel_file', excelFile);
 
       [
-        'panel_model','panels_per_string','inverter_model','dc_power_kwp',
+        'panel_model','panels_per_string','strings_per_mppt','mppts_per_switch','num_mppts_total',
+        'mppt_layout',
+        'inverter_model','dc_power_kwp',
         'ac_power_kwac','temp_rating','transformer_power','col_spacing','row_spacing',
         'circle_radius','text_size','heavy_section','heavy_linetype','heavy_color','heavy_layer'
       ].forEach(id => {
         const el = document.getElementById(id);
         if (el) fd.append(id, el.value);
       });
+
+      // Build panel_model_map from per-Wp inputs
+      const wpParts = [];
+      document.querySelectorAll('.wp-model-input').forEach(inp => {
+        const model = inp.value.trim();
+        if (model) wpParts.push(inp.dataset.wp + '=' + model);
+      });
+      fd.append('panel_model_map', wpParts.join('; '));
 
       fd.append('show_cable_info',     document.getElementById('show_cable_info').checked     ? 'true' : 'false');
       fd.append('hide_string_details', document.getElementById('hide_string_details').checked ? 'true' : 'false');

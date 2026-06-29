@@ -149,6 +149,74 @@ def index():
     )
 
 
+@app.route("/parse-excel", methods=["POST"])
+def parse_excel_wp():
+    """Quick parse: detect distinct Wp values from the cable-schedule Excel."""
+    if "excel_file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    f = request.files["excel_file"]
+    filename = f.filename or ""
+    if not _allowed_excel(filename):
+        return jsonify({"error": "Only .xlsx and .xls files are accepted"}), 400
+
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
+
+        # Locate master sheet '2E802-3' (same logic as generate())
+        ws = None
+        for name in wb.sheetnames:
+            if name.strip().lower() == "2e802-3":
+                ws = wb[name]
+                break
+        if ws is None:
+            ws = wb.active
+
+        # Find header row (search rows 26-32 for 'string name')
+        header_row = 30
+        col_wp = 21  # default column U
+        for r_idx in (30, 29, 28, 31, 32, 27, 26):
+            row_vals = [
+                str(ws.cell(row=r_idx, column=c).value or "").strip().lower()
+                for c in range(1, 35)
+            ]
+            if any("string name" in v for v in row_vals):
+                header_row = r_idx
+                # Two-tier Wp column detection (mirrors engine logic)
+                _wp_strong = False
+                for c in range(1, 35):
+                    val = str(ws.cell(row=header_row, column=c).value or "").strip().lower()
+                    if any(kw in val for kw in ("module type", "module power", "watt peak")):
+                        col_wp = c
+                        _wp_strong = True
+                    elif not _wp_strong and (
+                        "potenza" in val or re.search(r"(?<![a-z])wp(?![a-z])", val)
+                    ):
+                        col_wp = c
+                break
+
+        # Collect distinct Wp values from data rows
+        wp_set: set = set()
+        for row in ws.iter_rows(min_row=header_row + 1, min_col=col_wp, max_col=col_wp):
+            for cell in row:
+                v = cell.value
+                if v is None:
+                    continue
+                try:
+                    w = int(float(str(v).replace(",", ".")))
+                    if 50 < w < 2000:
+                        wp_set.add(w)
+                except (ValueError, TypeError):
+                    pass
+
+        wb.close()
+        return jsonify({"wp_values": sorted(wp_set)})
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/generate", methods=["POST"])
 def start_generation():
     # ── File presence & extension ─────────────────────────────────────────────
@@ -192,7 +260,12 @@ def start_generation():
         "template_dxf":        _TEMPLATE_DXF,
         "output_path":         output_path,
         "panel_model":         form.get("panel_model", ""),
+        "panel_model_map":     form.get("panel_model_map", ""),
         "panels_per_string":   form.get("panels_per_string", "0"),
+        "strings_per_mppt":    form.get("strings_per_mppt", "2"),
+        "mppts_per_switch":    form.get("mppts_per_switch", "4"),
+        "num_mppts_total":     form.get("num_mppts_total", "0"),
+        "mppt_layout":         form.get("mppt_layout", ""),
         "inverter_model":      form.get("inverter_model", ""),
         "dc_power_kwp":        form.get("dc_power_kwp", "0"),
         "ac_power_kwac":       form.get("ac_power_kwac", "0"),
