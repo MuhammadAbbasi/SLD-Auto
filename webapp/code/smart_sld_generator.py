@@ -507,6 +507,12 @@ def generate(cfg, log_cb=print):
     inverter_model    = cfg.get('inverter_model', '').strip()
     dc_power_kwp      = float(cfg.get('dc_power_kwp') or 0)
     ac_power_kwac     = float(cfg.get('ac_power_kwac') or 0)
+    ac_power_30c      = float(cfg.get('ac_power_30c') or 0)
+    max_ac_current    = cfg.get('max_ac_current', '').strip()
+    max_pv_current_per_mppt    = cfg.get('max_pv_current_per_mppt', '').strip()
+    max_dc_sc_current_per_mppt = cfg.get('max_dc_sc_current_per_mppt', '').strip()
+    mppt_voltage_range = (cfg.get('mppt_voltage_range', '') or "500...1’500V").strip()
+    max_vdc            = (cfg.get('max_vdc', '') or "1’500V").strip()
     temp_rating       = float(cfg.get('temp_rating') or 40)
     transformer_power = cfg.get('transformer_power', '').strip()
     show_cable_info     = cfg.get('show_cable_info', False)
@@ -929,6 +935,49 @@ def generate(cfg, log_cb=print):
     _strlbls = [m for m in tmpl_texts if m['cls'] == 'string_label']
     STR_X = min((d['x'] for d in _strlbls), default=circ_x + 1237.0)
 
+    # ── Auto-detect layout parameters from template geometry ──────────────────
+    # strings_per_mppt: template port labels define the actual slot count; always
+    # override the configured value so the output matches the template exactly.
+    _auto_max_slot = max((pt for _, pt, _ in port_rows), default=strings_per_mppt)
+    if _auto_max_slot != strings_per_mppt:
+        print(f"  Template defines {_auto_max_slot} slots/MPPT "
+              f"(overriding configured strings_per_mppt={strings_per_mppt})")
+        strings_per_mppt = _auto_max_slot
+
+    # MPPT slot layout: auto-detect which slots are reserved vs active by scanning
+    # the first inverter column's string labels in the template. Only runs when the
+    # template has 3+ slots/MPPT (2-slot templates have no meaningful reserve pattern)
+    # and the user has not already provided an explicit mppt_layout.
+    if not mppt_layout and strings_per_mppt >= 3 and _strlbls:
+        _left_port_x = min(d['x'] for _, _, d in port_rows) if port_rows else PORT_X
+        _auto_layout: dict = {}
+        _seen_mp: set = set()
+        for _am, _ap, _apr_d in sorted(port_rows, key=lambda r: (r[0], r[1])):
+            if abs(_apr_d['x'] - _left_port_x) > 300:
+                continue  # skip duplicate columns from multi-inverter template
+            if (_am, _ap) in _seen_mp:
+                continue
+            _seen_mp.add((_am, _ap))
+            _apy = _apr_d['y']
+            # Prefer exact Y match (string label on same line as port label)
+            _exact = [sl for sl in _strlbls if abs(sl['y'] - _apy) < 10]
+            if _exact:
+                _asl = min(_exact, key=lambda d: abs(d['x'] - STR_X))
+            else:
+                # Fuzzy match: prefer highest Y so the panel-detail string label
+                # (which sits above its port row) wins over the label one row below.
+                _fuzzy = [sl for sl in _strlbls if abs(sl['y'] - _apy) < PORT_Y_TOL]
+                _asl = (min(_fuzzy, key=lambda d: (abs(d['x'] - STR_X), -d['y']))
+                        if _fuzzy else None)
+            if _asl is not None:
+                _atxt = _strip_mtext_fmt(_asl['text']).lower()
+                _auto_layout.setdefault(_am, []).append('R' if _atxt == 'reserve' else _ap)
+        if any('R' in v for v in _auto_layout.values()):
+            mppt_layout = _auto_layout
+            _nres = sum(v.count('R') for v in _auto_layout.values())
+            print(f"  Auto-detected MPPT layout from template: {len(_auto_layout)} MPPTs, "
+                  f"{_nres} reserved slot(s)")
+
     # The template's first string (port 1-1) has its label above the panel-detail
     # strip, not just lbl_dy above the circle.  Capture that larger offset so the
     # procedural first row ("String T.I.1.1") appears in the correct position.
@@ -937,7 +986,7 @@ def generate(cfg, log_cb=print):
     if _strlbls:
         _topmost_sl = max(_strlbls, key=lambda d: d['y'])
         _toff = _topmost_sl['y'] - first_circle_y
-        if _toff > row_pitch * 1.5:   # genuine panel-detail gap
+        if _toff > row_pitch * 1.2:   # genuine panel-detail gap
             _panel_lbl_y_offset = _toff
             _panel_lbl_x        = _topmost_sl['x']
 
@@ -1162,7 +1211,7 @@ def generate(cfg, log_cb=print):
 
     def make_inv_title(T, I):
         dc = dc_power_kwp
-        if dc <= 0 and panels_per_string > 0:
+        if panels_per_string > 0:
             inv_data = excel.get((T, I), {})
             total_kwp = sum(
                 panels_per_string * sd['wp'] / 1000.0
@@ -1238,10 +1287,30 @@ def generate(cfg, log_cb=print):
                             d2['text'] = inverter_model.upper()
                         _place_entity_stretched(msp, d2, dxo, dyo, split_y, EXTRA)
                         continue
+                    _stripped_d = _strip_mtext_fmt(d['text'])
+                    if 'AC output power' in _stripped_d or 'Nominal AC voltage' in _stripped_d:
+                        # AC side spec block: regenerate with user-provided values
+                        _ac_parts = []
+                        if ac_power_30c > 0:
+                            _ac_parts.append(f"{ac_power_30c:.0f} kVA @30°C")
+                        if ac_power_kwac > 0:
+                            _ac_parts.append(f"{ac_power_kwac:.0f} kVA @40°C")
+                        _ac_line1 = ("AC output power " + " / ".join(_ac_parts)) if _ac_parts else "AC output power"
+                        _ac_curr  = f"Max AC output current: {max_ac_current}" if max_ac_current else "Max AC output current:"
+                        _ac_txt   = f"{_ac_line1}\\PNominal AC voltage : 800V, 3F + PE \\P{_ac_curr}"
+                        _place_entity_stretched(msp, dict(d, text=_ac_txt), dxo, dyo, split_y, EXTRA)
+                        continue
                     if 'CC side' in d['text'] or 'MPPT range' in d['text']:
-                        # DC-side spec block: pull it fully into the clear left area so its
-                        # long lines never cross the combiner feeds / MPPT labels.
-                        _place_entity_stretched(msp, dict(d, x=BOX_BUS_X - 2800.0),
+                        # DC-side spec block: regenerate dynamically with per-inverter MPPT count
+                        _n_inputs = num_mppts * eff_k
+                        _cc_pv  = (f"Max PV input current per MPPT: {max_pv_current_per_mppt}"
+                                   if max_pv_current_per_mppt else "Max PV input current per MPPT:")
+                        _cc_sc  = (f"Max DC short circuit current per MPPT: {max_dc_sc_current_per_mppt}"
+                                   if max_dc_sc_current_per_mppt else "Max DC short circuit current per MPPT:")
+                        _cc_txt = (f"CC side\\P{_n_inputs} input - {num_mppts} MPPT"
+                                   f"\\PMax Vdc : {max_vdc}\\P{_cc_pv}\\P{_cc_sc}"
+                                   f"\\PMPPT range :{mppt_voltage_range}")
+                        _place_entity_stretched(msp, dict(d, x=BOX_BUS_X - 2800.0, text=_cc_txt),
                                                 dxo, dyo, split_y, EXTRA)
                         continue
                     _place_entity_stretched(msp, d, dxo, dyo, split_y, EXTRA)

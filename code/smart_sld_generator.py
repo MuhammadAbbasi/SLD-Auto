@@ -507,6 +507,12 @@ def generate(cfg, log_cb=print):
     inverter_model    = cfg.get('inverter_model', '').strip()
     dc_power_kwp      = float(cfg.get('dc_power_kwp') or 0)
     ac_power_kwac     = float(cfg.get('ac_power_kwac') or 0)
+    ac_power_30c      = float(cfg.get('ac_power_30c') or 0)
+    max_ac_current    = cfg.get('max_ac_current', '').strip()
+    max_pv_current_per_mppt    = cfg.get('max_pv_current_per_mppt', '').strip()
+    max_dc_sc_current_per_mppt = cfg.get('max_dc_sc_current_per_mppt', '').strip()
+    mppt_voltage_range = (cfg.get('mppt_voltage_range', '') or "500...1'500V").strip()
+    max_vdc            = (cfg.get('max_vdc', '') or "1'500V").strip()
     temp_rating       = float(cfg.get('temp_rating') or 40)
     transformer_power = cfg.get('transformer_power', '').strip()
     show_cable_info     = cfg.get('show_cable_info', False)
@@ -926,6 +932,49 @@ def generate(cfg, log_cb=print):
     _strlbls = [m for m in tmpl_texts if m['cls'] == 'string_label']
     STR_X = min((d['x'] for d in _strlbls), default=circ_x + 1237.0)
 
+    # ── Auto-detect layout parameters from template geometry ──────────────────
+    # strings_per_mppt: template port labels define the actual slot count; always
+    # override the configured value so the output matches the template exactly.
+    _auto_max_slot = max((pt for _, pt, _ in port_rows), default=strings_per_mppt)
+    if _auto_max_slot != strings_per_mppt:
+        print(f"  Template defines {_auto_max_slot} slots/MPPT "
+              f"(overriding configured strings_per_mppt={strings_per_mppt})")
+        strings_per_mppt = _auto_max_slot
+
+    # MPPT slot layout: auto-detect which slots are reserved vs active by scanning
+    # the first inverter column's string labels in the template. Only runs when the
+    # template has 3+ slots/MPPT (2-slot templates have no meaningful reserve pattern)
+    # and the user has not already provided an explicit mppt_layout.
+    if not mppt_layout and strings_per_mppt >= 3 and _strlbls:
+        _left_port_x = min(d['x'] for _, _, d in port_rows) if port_rows else PORT_X
+        _auto_layout: dict = {}
+        _seen_mp: set = set()
+        for _am, _ap, _apr_d in sorted(port_rows, key=lambda r: (r[0], r[1])):
+            if abs(_apr_d['x'] - _left_port_x) > 300:
+                continue  # skip duplicate columns from multi-inverter template
+            if (_am, _ap) in _seen_mp:
+                continue
+            _seen_mp.add((_am, _ap))
+            _apy = _apr_d['y']
+            # Prefer exact Y match (string label on same line as port label)
+            _exact = [sl for sl in _strlbls if abs(sl['y'] - _apy) < 10]
+            if _exact:
+                _asl = min(_exact, key=lambda d: abs(d['x'] - STR_X))
+            else:
+                # Fuzzy match: prefer highest Y so the panel-detail string label
+                # (which sits above its port row) wins over the label one row below.
+                _fuzzy = [sl for sl in _strlbls if abs(sl['y'] - _apy) < PORT_Y_TOL]
+                _asl = (min(_fuzzy, key=lambda d: (abs(d['x'] - STR_X), -d['y']))
+                        if _fuzzy else None)
+            if _asl is not None:
+                _atxt = _strip_mtext_fmt(_asl['text']).lower()
+                _auto_layout.setdefault(_am, []).append('R' if _atxt == 'reserve' else _ap)
+        if any('R' in v for v in _auto_layout.values()):
+            mppt_layout = _auto_layout
+            _nres = sum(v.count('R') for v in _auto_layout.values())
+            print(f"  Auto-detected MPPT layout from template: {len(_auto_layout)} MPPTs, "
+                  f"{_nres} reserved slot(s)")
+
     # Combiner bus X anchors = vertical bracket polylines inside the box, left of circle.
     _bus_xs = []
     for d in tmpl:
@@ -1008,6 +1057,28 @@ def generate(cfg, log_cb=print):
 
     frame = [d for d in tmpl if not _is_repeating(d)]
     TOP_Y = first_circle_y           # connection Y of the first (top) string row
+
+    # Panel-detail strip: the first string's cable must extend to the numbered-box edge.
+    _panel_cable_right_x = cable_x_end
+    for _pd in frame:
+        if _pd['type'] == 'LWPOLYLINE':
+            _pd_xs = [p[0] for p in _pd.get('pts', [])]
+            _pd_ys = [p[1] for p in _pd.get('pts', [])]
+            if (_pd_xs and max(_pd_xs) > 22000
+                    and any(abs(y - first_circle_y) < row_pitch for y in _pd_ys)):
+                _panel_cable_right_x = max(_panel_cable_right_x, max(_pd_xs))
+
+    # Panel-detail string label offset: capture Y distance from first circle to the
+    # "String T.I.1" label, which sits above the panel box strip (not at lbl_dy).
+    _panel_lbl_y_offset = lbl_dy
+    _panel_lbl_x        = STR_X
+    if _strlbls:
+        _topmost_sl = max(_strlbls, key=lambda d: d['y'])
+        _toff = _topmost_sl['y'] - first_circle_y
+        if _toff > row_pitch * 1.2:
+            _panel_lbl_y_offset = _toff
+            _panel_lbl_x        = _topmost_sl['x']
+
     template_rows = len(port_rows)   # 32 for the 16-MPPT / 2-port template
     print(f"Row layout: pitch={row_pitch:.1f} units, template MPPTs={max_tmpl_m}, "
           f"strings/MPPT={strings_per_mppt}, MPPTs/switch={mppts_per_switch}, "
@@ -1123,7 +1194,7 @@ def generate(cfg, log_cb=print):
 
     def make_inv_title(T, I):
         dc = dc_power_kwp
-        if dc <= 0 and panels_per_string > 0:
+        if panels_per_string > 0:
             inv_data = excel.get((T, I), {})
             total_kwp = sum(
                 panels_per_string * sd['wp'] / 1000.0
@@ -1199,10 +1270,28 @@ def generate(cfg, log_cb=print):
                             d2['text'] = inverter_model.upper()
                         _place_entity_stretched(msp, d2, dxo, dyo, split_y, EXTRA)
                         continue
+                    _stripped_d = _strip_mtext_fmt(d['text'])
+                    if 'AC output power' in _stripped_d or 'Nominal AC voltage' in _stripped_d:
+                        _ac_parts = []
+                        if ac_power_30c > 0:
+                            _ac_parts.append(f"{ac_power_30c:.0f} kVA @30°C")
+                        if ac_power_kwac > 0:
+                            _ac_parts.append(f"{ac_power_kwac:.0f} kVA @40°C")
+                        _ac_line1 = ("AC output power " + " / ".join(_ac_parts)) if _ac_parts else "AC output power"
+                        _ac_curr  = f"Max AC output current: {max_ac_current}" if max_ac_current else "Max AC output current:"
+                        _ac_txt   = f"{_ac_line1}\\PNominal AC voltage : 800V, 3F + PE \\P{_ac_curr}"
+                        _place_entity_stretched(msp, dict(d, text=_ac_txt), dxo, dyo, split_y, EXTRA)
+                        continue
                     if 'CC side' in d['text'] or 'MPPT range' in d['text']:
-                        # DC-side spec block: pull it fully into the clear left area so its
-                        # long lines never cross the combiner feeds / MPPT labels.
-                        _place_entity_stretched(msp, dict(d, x=BOX_BUS_X - 2800.0),
+                        _n_inputs = num_mppts * eff_k
+                        _cc_pv  = (f"Max PV input current per MPPT: {max_pv_current_per_mppt}"
+                                   if max_pv_current_per_mppt else "Max PV input current per MPPT:")
+                        _cc_sc  = (f"Max DC short circuit current per MPPT: {max_dc_sc_current_per_mppt}"
+                                   if max_dc_sc_current_per_mppt else "Max DC short circuit current per MPPT:")
+                        _cc_txt = (f"CC side\\P{_n_inputs} input - {num_mppts} MPPT"
+                                   f"\\PMax Vdc : {max_vdc}\\P{_cc_pv}\\P{_cc_sc}"
+                                   f"\\PMPPT range :{mppt_voltage_range}")
+                        _place_entity_stretched(msp, dict(d, x=BOX_BUS_X - 2800.0, text=_cc_txt),
                                                 dxo, dyo, split_y, EXTRA)
                         continue
                     _place_entity_stretched(msp, d, dxo, dyo, split_y, EXTRA)
@@ -1236,6 +1325,7 @@ def generate(cfg, log_cb=print):
 
                 for slot_p, active, lookup_p in slots:
                     yc = TOP_Y - gr * row_pitch
+                    _is_panel_row = (m == 1 and slot_p == slots[0][0])
                     grp_ys.append(yc)
                     gr += 1
                     section_str = lst[lookup_p - 1]['section'] if active and (lookup_p - 1) < len(lst) else ''
@@ -1244,15 +1334,18 @@ def generate(cfg, log_cb=print):
                     cc.dxf.color = 7 if active else 8
                     _add_poly([(BUS_X + dxo, yc + dyo),
                                (circ_x - circle_radius_cfg + dxo, yc + dyo)], style)
+                    _ce = _panel_cable_right_x if _is_panel_row else cable_x_end
                     _add_poly([(circ_x + circle_radius_cfg + dxo, yc + dyo),
-                               (cable_x_end + dxo, yc + dyo)], style)
+                               (_ce + dxo, yc + dyo)], style)
                     if active:
                         for dd in row_deco:
                             _place_entity(msp, dd, dxo, yc + dyo)
                     _place_lbl(portlbl_proto, PORT_X, yc + lbl_dy, f"{m}-{slot_p}",
                                7 if active else 8, dxo, dyo)
-                    _place_lbl(strlbl_proto, STR_X, yc + lbl_dy,
-                               make_string_label(T, I, m, lookup_p),
+                    _sl_y = yc + (_panel_lbl_y_offset if _is_panel_row else lbl_dy)
+                    _sl_x = _panel_lbl_x if _is_panel_row else STR_X
+                    _place_lbl(strlbl_proto, _sl_x, _sl_y,
+                               make_string_label(T, I, m, lookup_p) if active else "reserve",
                                7 if active else 8, dxo, dyo,
                                width=STRING_LABEL_MIN_WIDTH, char_h=text_size_cfg)
                 _draw_combiner(dxo, dyo, grp_ys, f"MPP{m}")
@@ -1427,7 +1520,7 @@ class SmartSLDGui:
 
     # ── Variables ─────────────────────────────────────────────────────────────
     def _setup_vars(self):
-        _DEFAULT_TEMPLATE = os.environ.get('SLD_TEMPLATE_PATH', r'\\S01\2 privato\2025.046 - Sunnerg YANEL\26S001_2E103 - DC Single Line Diagram.dxf')
+        _DEFAULT_TEMPLATE = os.environ.get('SLD_TEMPLATE_PATH', r'\\S01\5 temp\A176Lab Tools\SLD Generator\Lista Cavi - Cavi LV-DC 28.05.2026.dxf')
         self.var_excel    = ctk.StringVar(value=self.history.get('xlsx_path', ''))
         self.var_template = ctk.StringVar(value=self.history.get('template_dxf', _DEFAULT_TEMPLATE))
         self.var_out      = ctk.StringVar(value=self.history.get('output_path', ''))
@@ -1440,6 +1533,12 @@ class SmartSLDGui:
         self.var_inv_model   = ctk.StringVar(value=self.history.get('inverter_model', 'Sungrow SG350HX'))
         self.var_dc_power    = ctk.StringVar(value=self.history.get('dc_power_kwp', '350'))
         self.var_ac_power    = ctk.StringVar(value=self.history.get('ac_power_kwac', '320'))
+        self.var_ac_power_30c = ctk.StringVar(value=self.history.get('ac_power_30c', ''))
+        self.var_max_ac_current = ctk.StringVar(value=self.history.get('max_ac_current', ''))
+        self.var_max_pv_current = ctk.StringVar(value=self.history.get('max_pv_current_per_mppt', ''))
+        self.var_max_dc_sc = ctk.StringVar(value=self.history.get('max_dc_sc_current_per_mppt', ''))
+        self.var_mppt_vrange = ctk.StringVar(value=self.history.get('mppt_voltage_range', ''))
+        self.var_max_vdc   = ctk.StringVar(value=self.history.get('max_vdc', ''))
         self.var_temp        = ctk.StringVar(value=self.history.get('temp_rating', '40'))
 
         self.var_show_cable          = ctk.BooleanVar(value=self.history.get('show_cable_info', False))
@@ -1458,9 +1557,9 @@ class SmartSLDGui:
         # MPPT layout grid
         self.var_num_mppts_layout = ctk.StringVar(value=str(self.history.get('num_mppts_layout', '6')))
         self.var_mppt_layout      = ctk.StringVar(value=self.history.get('mppt_layout', ''))
-        self._mppt_state: list  = []
-        self._mppt_btns:  list  = []
-        self._mppt_grid_frame   = None
+        self._mppt_slot_btns:  dict = {}   # {(m, p): CTkButton}
+        self._mppt_slot_state: dict = {}   # {(m, p): 'A'|'R'}
+        self._mppt_grid_frame       = None
 
         # Dynamic per-Wp panel model fields
         self._wp_model_vars: dict = {}   # {wp_int: ctk.StringVar}
@@ -1473,6 +1572,87 @@ class SmartSLDGui:
         xlsx = self.var_excel.get()
         if xlsx:
             self.var_out.set(os.path.splitext(xlsx)[0] + '_SLD_Generated.dxf')
+
+    # ── Dynamic Wp model fields ───────────────────────────────────────────────
+    def _on_excel_changed(self, *_):
+        xlsx = self.var_excel.get()
+        if xlsx and os.path.isfile(xlsx):
+            threading.Thread(target=self._parse_excel_wp, args=(xlsx,), daemon=True).start()
+
+    def _parse_excel_wp(self, xlsx_path):
+        try:
+            import openpyxl as _xl2
+            wb = _xl2.load_workbook(xlsx_path, data_only=True, read_only=True)
+            ws = None
+            for name in wb.sheetnames:
+                if name.strip().lower() == '2e802-3':
+                    ws = wb[name]; break
+            if ws is None:
+                ws = wb.active
+            header_row, col_wp = 30, 21
+            for r_idx in (30, 29, 28, 31, 32, 27, 26):
+                row_vals = [str(ws.cell(row=r_idx, column=c).value or '').strip().lower()
+                            for c in range(1, 35)]
+                if any('string name' in v for v in row_vals):
+                    header_row = r_idx
+                    _strong = False
+                    for c in range(1, 35):
+                        val = str(ws.cell(row=header_row, column=c).value or '').strip().lower()
+                        if any(kw in val for kw in ('module type', 'module power', 'watt peak')):
+                            col_wp = c; _strong = True
+                        elif not _strong and ('potenza' in val or re.search(r'(?<![a-z])wp(?![a-z])', val)):
+                            col_wp = c
+                    break
+            wp_set: set = set()
+            for row in ws.iter_rows(min_row=header_row + 1, min_col=col_wp, max_col=col_wp):
+                for cell in row:
+                    v = cell.value
+                    if v is None: continue
+                    try:
+                        w = int(float(str(v).replace(',', '.')))
+                        if 50 < w < 2000: wp_set.add(w)
+                    except (ValueError, TypeError):
+                        pass
+            wb.close()
+            wp_values = sorted(wp_set)
+        except Exception as e:
+            print(f"[WARNING] Could not parse Excel for Wp values: {e}")
+            wp_values = []
+        self.root.after(0, self._update_wp_model_ui, wp_values)
+
+    def _update_wp_model_ui(self, wp_values):
+        if not self._wp_model_frame:
+            return
+        for w in self._wp_model_frame.winfo_children():
+            w.destroy()
+        if not wp_values:
+            ctk.CTkLabel(self._wp_model_frame,
+                         text="Carica il file Excel per rilevare i tipi di pannello.",
+                         text_color=_MUTED, font=("Segoe UI", 10),
+                         anchor="w").pack(padx=8, pady=6, anchor="w")
+            self._wp_model_vars = {}
+            return
+        default_model = self.var_panel_model.get().strip()
+        self._wp_model_vars = {}
+        for wp in wp_values:
+            prefill = default_model if len(wp_values) == 1 else ''
+            var = ctk.StringVar(value=prefill)
+            self._wp_model_vars[wp] = var
+            row = ctk.CTkFrame(self._wp_model_frame, fg_color="transparent")
+            row.pack(fill="x", padx=6, pady=2)
+            ctk.CTkLabel(row, text=f"{wp} Wp", font=("Segoe UI", 10, "bold"),
+                         text_color=_TEXT, width=55, anchor="e").pack(side="left", padx=(0, 6))
+            ctk.CTkEntry(row, textvariable=var, height=28, corner_radius=6,
+                         fg_color="white", border_color=_BORDER, font=("Segoe UI", 10),
+                         placeholder_text="Nome modello").pack(side="left", fill="x", expand=True)
+
+    def _build_panel_map_string(self):
+        parts = [f"{wp}={var.get().strip()}"
+                 for wp, var in sorted(self._wp_model_vars.items())
+                 if var.get().strip()]
+        if not parts:
+            return self.var_panel_map.get().strip()
+        return "; ".join(parts)
 
     def _on_inverter_select(self, choice):
         if choice in _INVERTER_POWERS:
@@ -1724,8 +1904,14 @@ class SmartSLDGui:
                        command=self._manage_inverters).pack(side="left")
 
         _lbl_entry(col_l, "Potenza DC (kWp):", self.var_dc_power, 100)
-        _lbl_entry(col_l, "Potenza AC (kWac):", self.var_ac_power, 100)
+        _lbl_entry(col_l, "Potenza AC @40°C (kVA):", self.var_ac_power, 100)
+        _lbl_entry(col_l, "Potenza AC @30°C (kVA):", self.var_ac_power_30c, 100)
+        _lbl_entry(col_l, "Corrente AC max:", self.var_max_ac_current, 120)
         _lbl_entry(col_l, "Temperatura (°C):", self.var_temp, 100)
+        _lbl_entry(col_l, "I max PV per MPPT:", self.var_max_pv_current, 120)
+        _lbl_entry(col_l, "I cc max per MPPT:", self.var_max_dc_sc, 120)
+        _lbl_entry(col_l, "Range tensione MPPT:", self.var_mppt_vrange, 140)
+        _lbl_entry(col_l, "Vdc max:", self.var_max_vdc, 120)
 
         # Right column
         # Panel model
@@ -1851,6 +2037,140 @@ class SmartSLDGui:
         _pair(col_r, "Linetype:",     self.var_heavy_linetype)
         _pair(col_r, "Colore (indice):", self.var_heavy_color)
         _pair(col_r, "Layer heavy:", self.var_heavy_layer)
+
+    # ── Step 4: MPPT layout ───────────────────────────────────────────────────
+    def _build_step4(self):
+        body = _card(self.scroll, "Step 4 - Layout MPPT (Opzionale)")
+        ctk.CTkLabel(body,
+                     text="Clicca su uno slot per alternare ATTIVO / RISERVA. "
+                          "Lascia tutti ATTIVI per rilevamento automatico dal template.",
+                     font=("Segoe UI", 11), text_color=_MUTED, anchor="w").pack(anchor="w", pady=(0, 8))
+
+        # Controls row
+        ctrl = ctk.CTkFrame(body, fg_color="transparent")
+        ctrl.pack(fill="x", pady=(0, 6))
+
+        def _ctrl_entry(lbl, var, w=60):
+            ctk.CTkLabel(ctrl, text=lbl, text_color=_TEXT,
+                         font=("Segoe UI", 12)).pack(side="left", padx=(0, 4))
+            e = ctk.CTkEntry(ctrl, textvariable=var, width=w, height=30, corner_radius=6,
+                             fg_color="white", border_color=_BORDER, font=("Segoe UI", 11))
+            e.pack(side="left", padx=(0, 16))
+
+        _ctrl_entry("N. MPPTs:", self.var_num_mppts_layout, 60)
+        _ctrl_entry("Slot/MPPT:", self.var_strings_mppt, 60)
+        _ctrl_entry("MPPTs/Switch:", self.var_mppts_switch, 60)
+
+        ctk.CTkButton(ctrl, text="Aggiorna Griglia", height=30, corner_radius=6,
+                       fg_color=_BLUE, hover_color=_BLUE_H, text_color="white",
+                       font=("Segoe UI", 11), width=130,
+                       command=self._rebuild_mppt_grid).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(ctrl, text="Reset tutto ATTIVO", height=30, corner_radius=6,
+                       fg_color="#E8EAED", hover_color="#DADCE0", text_color=_TEXT,
+                       font=("Segoe UI", 11), width=140,
+                       command=self._reset_mppt_grid).pack(side="left")
+
+        # Scrollable grid frame
+        self._mppt_grid_frame = ctk.CTkScrollableFrame(body, fg_color="#F1F3F4",
+                                                        corner_radius=8, height=280)
+        self._mppt_grid_frame.pack(fill="x", pady=(4, 0))
+
+        # Build initial grid from current layout var
+        self._rebuild_mppt_grid()
+
+    def _rebuild_mppt_grid(self):
+        import json
+        for w in self._mppt_grid_frame.winfo_children():
+            w.destroy()
+        self._mppt_slot_btns.clear()
+        self._mppt_slot_state.clear()
+
+        try:
+            n_mppts = max(1, int(self.var_num_mppts_layout.get() or 6))
+            n_slots  = max(1, int(self.var_strings_mppt.get() or 5))
+        except ValueError:
+            return
+
+        # Load existing layout
+        existing = {}
+        try:
+            raw = self.var_mppt_layout.get().strip()
+            if raw:
+                existing = {int(k): list(v) for k, v in json.loads(raw).items()}
+        except Exception:
+            pass
+
+        # Column headers
+        hdr = ctk.CTkFrame(self._mppt_grid_frame, fg_color="transparent")
+        hdr.pack(fill="x", padx=4, pady=(4, 0))
+        ctk.CTkLabel(hdr, text="", width=72).pack(side="left")
+        for p in range(1, n_slots + 1):
+            ctk.CTkLabel(hdr, text=f"Slot {p}", width=82,
+                         font=("Segoe UI", 11, "bold"), text_color=_MUTED).pack(side="left", padx=2)
+
+        # MPPT rows
+        for m in range(1, n_mppts + 1):
+            row_f = ctk.CTkFrame(self._mppt_grid_frame, fg_color="transparent")
+            row_f.pack(fill="x", padx=4, pady=2)
+            ctk.CTkLabel(row_f, text=f"MPP{m}", width=72,
+                         font=("Segoe UI", 12, "bold"), text_color=_TEXT).pack(side="left")
+            ex_row = existing.get(m, [])
+            for p in range(1, n_slots + 1):
+                state = 'R' if (p - 1 < len(ex_row) and ex_row[p - 1] == 'R') else 'A'
+                self._mppt_slot_state[(m, p)] = state
+                btn = ctk.CTkButton(
+                    row_f,
+                    text="RISERVA" if state == 'R' else "ATTIVO",
+                    width=80, height=28, corner_radius=6,
+                    fg_color=_ERROR if state == 'R' else _BLUE,
+                    hover_color="#C0392B" if state == 'R' else _BLUE_H,
+                    text_color="white", font=("Segoe UI", 10),
+                    command=lambda _m=m, _p=p: self._toggle_mppt_slot(_m, _p))
+                btn.pack(side="left", padx=2)
+                self._mppt_slot_btns[(m, p)] = btn
+
+        self._serialize_mppt_layout()
+
+    def _toggle_mppt_slot(self, m, p):
+        cur = self._mppt_slot_state.get((m, p), 'A')
+        new = 'R' if cur == 'A' else 'A'
+        self._mppt_slot_state[(m, p)] = new
+        btn = self._mppt_slot_btns.get((m, p))
+        if btn:
+            btn.configure(
+                text="RISERVA" if new == 'R' else "ATTIVO",
+                fg_color=_ERROR if new == 'R' else _BLUE,
+                hover_color="#C0392B" if new == 'R' else _BLUE_H)
+        self._serialize_mppt_layout()
+
+    def _reset_mppt_grid(self):
+        for (m, p), btn in self._mppt_slot_btns.items():
+            self._mppt_slot_state[(m, p)] = 'A'
+            btn.configure(text="ATTIVO", fg_color=_BLUE, hover_color=_BLUE_H)
+        self._serialize_mppt_layout()
+
+    def _serialize_mppt_layout(self):
+        import json
+        if not self._mppt_slot_state or not any(v == 'R' for v in self._mppt_slot_state.values()):
+            self.var_mppt_layout.set('')
+            return
+        try:
+            n_mppts = max(1, int(self.var_num_mppts_layout.get() or 6))
+            n_slots  = max(1, int(self.var_strings_mppt.get() or 5))
+        except ValueError:
+            return
+        layout = {}
+        for m in range(1, n_mppts + 1):
+            act = 1
+            row = []
+            for p in range(1, n_slots + 1):
+                if self._mppt_slot_state.get((m, p), 'A') == 'R':
+                    row.append('R')
+                else:
+                    row.append(act)
+                    act += 1
+            layout[str(m)] = row
+        self.var_mppt_layout.set(json.dumps(layout))
 
     # ── Add-new preset dialogs ────────────────────────────────────────────────
     def _add_new_panel(self):
@@ -2164,6 +2484,12 @@ class SmartSLDGui:
             'inverter_model':     self.var_inv_model.get().strip(),
             'dc_power_kwp':       self.var_dc_power.get().strip(),
             'ac_power_kwac':      self.var_ac_power.get().strip(),
+            'ac_power_30c':       self.var_ac_power_30c.get().strip(),
+            'max_ac_current':     self.var_max_ac_current.get().strip(),
+            'max_pv_current_per_mppt':    self.var_max_pv_current.get().strip(),
+            'max_dc_sc_current_per_mppt': self.var_max_dc_sc.get().strip(),
+            'mppt_voltage_range': self.var_mppt_vrange.get().strip(),
+            'max_vdc':            self.var_max_vdc.get().strip(),
             'temp_rating':        self.var_temp.get().strip(),
             'transformer_power':  '',
             'show_cable_info':    self.var_show_cable.get(),

@@ -101,7 +101,7 @@
           <label class="block text-sm font-medium mb-1">Strings per MPPT
             <span class="text-gray-400 font-normal text-xs">(rows drawn per MPPT)</span></label>
           <input type="number" id="strings_per_mppt" name="strings_per_mppt"
-                 value="2" min="1" max="12"
+                 value="5" min="1" max="12"
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
 
@@ -109,7 +109,7 @@
           <label class="block text-sm font-medium mb-1">MPPTs per DC Switch
             <span class="text-gray-400 font-normal text-xs">(switch count = MPPTs ÷ this)</span></label>
           <input type="number" id="mppts_per_switch" name="mppts_per_switch"
-                 value="4" min="1" max="16"
+                 value="2" min="1" max="16"
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
 
@@ -130,16 +130,31 @@
         </div>
 
         <div>
-          <label class="block text-sm font-medium mb-1">DC Power (KWp)</label>
+          <label class="block text-sm font-medium mb-1">DC Power (KWp)
+            <span class="text-gray-400 font-normal text-xs">(fallback; auto-calc from Excel when panels set)</span></label>
           <input type="number" id="dc_power_kwp" name="dc_power_kwp"
                  value="350" step="any"
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
 
         <div>
-          <label class="block text-sm font-medium mb-1">AC Power (KWac)</label>
+          <label class="block text-sm font-medium mb-1">AC Power @40°C (kVA)</label>
           <input type="number" id="ac_power_kwac" name="ac_power_kwac"
                  value="320" step="any"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">AC Power @30°C (kVA)</label>
+          <input type="number" id="ac_power_30c" name="ac_power_30c"
+                 value="" step="any" placeholder="e.g. 352"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Max AC Output Current</label>
+          <input type="text" id="max_ac_current" name="max_ac_current"
+                 placeholder="e.g. 254 A"
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
 
@@ -154,6 +169,34 @@
           <label class="block text-sm font-medium mb-1">Transformer Power</label>
           <input type="text" id="transformer_power" name="transformer_power"
                  placeholder="e.g. 2500 kVA"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Max PV Input Current per MPPT</label>
+          <input type="text" id="max_pv_current_per_mppt" name="max_pv_current_per_mppt"
+                 placeholder="e.g. 30A"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Max DC Short Circuit Current per MPPT</label>
+          <input type="text" id="max_dc_sc_current_per_mppt" name="max_dc_sc_current_per_mppt"
+                 placeholder="e.g. 60A"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">MPPT Voltage Range</label>
+          <input type="text" id="mppt_voltage_range" name="mppt_voltage_range"
+                 placeholder="500...1'500V"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium mb-1">Max Vdc</label>
+          <input type="text" id="max_vdc" name="max_vdc"
+                 placeholder="1'500V"
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
 
@@ -567,7 +610,9 @@
         'panel_model','panels_per_string','strings_per_mppt','mppts_per_switch','num_mppts_total',
         'mppt_layout',
         'inverter_model','dc_power_kwp',
-        'ac_power_kwac','temp_rating','transformer_power','col_spacing','row_spacing',
+        'ac_power_kwac','ac_power_30c','max_ac_current',
+        'max_pv_current_per_mppt','max_dc_sc_current_per_mppt','mppt_voltage_range','max_vdc',
+        'temp_rating','transformer_power','col_spacing','row_spacing',
         'circle_radius','text_size','heavy_section','heavy_linetype','heavy_color','heavy_layer'
       ].forEach(id => {
         const el = document.getElementById(id);

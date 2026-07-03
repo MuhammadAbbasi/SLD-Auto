@@ -42,10 +42,12 @@ _JOBS_LOCK = threading.Lock()
 _UPLOAD_ROOT = Path(tempfile.gettempdir()) / "sld_auto_jobs"
 _UPLOAD_ROOT.mkdir(exist_ok=True)
 
-# Template path: set TEMPLATE_DXF env var or place file at webapp/template/template.dxf
+# Template path: set TEMPLATE_DXF env var, or use bundled copy, or fall back to network share
+_BUNDLED_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "template", "template.dxf")
+_NETWORK_TEMPLATE = r"\\S01\5 temp\A176Lab Tools\SLD Generator\Lista Cavi - Cavi LV-DC 28.05.2026.dxf"
 _TEMPLATE_DXF = os.environ.get(
     "TEMPLATE_DXF",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "template", "template.dxf"),
+    _BUNDLED_TEMPLATE if os.path.isfile(_BUNDLED_TEMPLATE) else _NETWORK_TEMPLATE,
 )
 
 # ── Input validation constants ────────────────────────────────────────────────
@@ -262,13 +264,19 @@ def start_generation():
         "panel_model":         form.get("panel_model", ""),
         "panel_model_map":     form.get("panel_model_map", ""),
         "panels_per_string":   form.get("panels_per_string", "0"),
-        "strings_per_mppt":    form.get("strings_per_mppt", "2"),
-        "mppts_per_switch":    form.get("mppts_per_switch", "4"),
+        "strings_per_mppt":    form.get("strings_per_mppt", "5"),
+        "mppts_per_switch":    form.get("mppts_per_switch", "2"),
         "num_mppts_total":     form.get("num_mppts_total", "0"),
         "mppt_layout":         form.get("mppt_layout", ""),
         "inverter_model":      form.get("inverter_model", ""),
         "dc_power_kwp":        form.get("dc_power_kwp", "0"),
         "ac_power_kwac":       form.get("ac_power_kwac", "0"),
+        "ac_power_30c":        form.get("ac_power_30c", "0"),
+        "max_ac_current":      form.get("max_ac_current", ""),
+        "max_pv_current_per_mppt":    form.get("max_pv_current_per_mppt", ""),
+        "max_dc_sc_current_per_mppt": form.get("max_dc_sc_current_per_mppt", ""),
+        "mppt_voltage_range":  form.get("mppt_voltage_range", ""),
+        "max_vdc":             form.get("max_vdc", ""),
         "temp_rating":         form.get("temp_rating", "40"),
         "transformer_power":   form.get("transformer_power", ""),
         "show_cable_info":     form.get("show_cable_info") == "true",
