@@ -808,13 +808,15 @@ def generate(cfg, log_cb=print):
     xcut = xmin + COL_STEP
 
     # Template column entities crop.
-    # MTEXT entities are always kept regardless of X position because fixed labels
-    # (e.g. "CC side" details, DC switch labels) may be anchored on the right side
-    # of the inverter frame. Only geometry (lines, polylines, circles) is cropped
-    # to the single-column slice at xcut.
+    # Apply X filter to both geometry and MTEXT so that multi-column templates
+    # (e.g. a completed 9-inverter SLD used as the reference) do not bleed
+    # texts from columns 2-N into the single-frame slice. A 20% padding over
+    # COL_STEP ensures right-aligned text anchored near the column boundary
+    # is still included.
+    _mtext_xcut = xmin + COL_STEP * 1.20
     def _in_column(d):
         if d['type'] == 'MTEXT':
-            return True   # keep all text — XCut never applies to labels
+            return d.get('x', 0) <= _mtext_xcut
         return _entity_min_x(d) <= xcut
 
     tmpl = [d for d in all_dicts if _in_column(d) and not _is_placeholder_rect(d)]
@@ -1183,6 +1185,18 @@ def generate(cfg, log_cb=print):
     chd = next((m for m in tmpl_texts if m['cls'] == 'cabin_header'), None)
     cld = next((m for m in tmpl_texts if m['cls'] == 'cabin_label'),  None)
 
+    # Extract the inverter model string embedded in the template title
+    # (format: "INVERTER 1.1 - MODEL - P= ...") so we can replace it in the
+    # inner-box model label regardless of what brand the template was built with.
+    _tmpl_inv_model = None
+    if td:
+        _title_stripped = _strip_mtext_fmt(td['text'])
+        _tparts = re.split(r'\s*-\s*', _title_stripped)
+        if len(_tparts) >= 2:
+            _candidate = _tparts[1].strip()
+            if _candidate and 'P=' not in _candidate and len(_candidate) > 3:
+                _tmpl_inv_model = _candidate
+
     def make_string_label(T, I, mppt, port, is_panel_row=False):
         lst = excel.get((T, I), {}).get(mppt, [])
         if port - 1 < len(lst):
@@ -1282,7 +1296,8 @@ def generate(cfg, log_cb=print):
                             new_txt = "2/ (1x6/10)mmq - Cu - H1Z2Z2k"
                         _place_entity_stretched(msp, dict(d, text=new_txt), dxo, dyo, split_y, EXTRA)
                         continue
-                    if 'SUNGROW' in d['text'] or 'inverter' in d['text'].lower():
+                    if ('SUNGROW' in d['text'] or 'inverter' in d['text'].lower()
+                            or (_tmpl_inv_model and _tmpl_inv_model in d['text'])):
                         d2 = dict(d)
                         if inverter_model:
                             d2['text'] = inverter_model.upper()
