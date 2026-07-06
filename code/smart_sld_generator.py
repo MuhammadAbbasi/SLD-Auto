@@ -1034,7 +1034,7 @@ def generate(cfg, log_cb=print):
                         or re.match(r'^MPP\s*\d+$', s)
                         or re.search(r'DC SWITCH', s, re.I))
         if t == 'LWPOLYLINE':
-            if d.get('color') == 40:
+            if d.get('color') in (8, 40):
                 return True
             xs = [p[0] for p in d['pts']]
             ys = [p[1] for p in d['pts']]
@@ -1057,7 +1057,7 @@ def generate(cfg, log_cb=print):
 
     # Panel-detail strip: the first string's cable must extend to the numbered-box edge.
     _panel_cable_right_x = cable_x_end
-    for _pd in frame:
+    for _pd in tmpl:
         if _pd['type'] == 'LWPOLYLINE':
             _pd_xs = [p[0] for p in _pd.get('pts', [])]
             _pd_ys = [p[1] for p in _pd.get('pts', [])]
@@ -1314,7 +1314,7 @@ def generate(cfg, log_cb=print):
                         _cc_floor = (tmpl_bottom_y - row_pitch + frame_shift
                                      + 7.0 * text_size_cfg * 1.6 + 30.0)
                         _cc_y = max(_cc_y, _cc_floor)
-                        _cc_d = dict(d, x=BOX_BUS_X - 2800.0, y=_cc_y, text=_cc_txt)
+                        _cc_d = dict(d, x=BOX_BUS_X - 100.0, y=_cc_y, text=_cc_txt)
                         _place_entity_stretched(msp, _cc_d, dxo, dyo, split_y, EXTRA)
                         continue
                     _place_entity_stretched(msp, d, dxo, dyo, split_y, EXTRA)
