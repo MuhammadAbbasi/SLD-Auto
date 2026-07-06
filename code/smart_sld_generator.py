@@ -1166,7 +1166,7 @@ def generate(cfg, log_cb=print):
     chd = next((m for m in tmpl_texts if m['cls'] == 'cabin_header'), None)
     cld = next((m for m in tmpl_texts if m['cls'] == 'cabin_label'),  None)
 
-    def make_string_label(T, I, mppt, port):
+    def make_string_label(T, I, mppt, port, is_panel_row=False):
         lst = excel.get((T, I), {}).get(mppt, [])
         if port - 1 < len(lst):
             sdata = lst[port - 1]
@@ -1175,17 +1175,18 @@ def generate(cfg, log_cb=print):
             l_plus = sdata['l_plus']
             l_minus = sdata['l_minus']
             sec = sdata['section']
-            
+
             label = f"String {name}"
-            if not hide_string_details:
+            # Panel-detail row: label only - the panel strip below already shows the full model.
+            if not is_panel_row and not hide_string_details:
                 if panels_per_string > 0:
-                    suffix = f" {wp}Wp" if wp > 0 else ""
                     # Per-watt model override (mixed-panel inverters) falls back to the
                     # global panel model when this watt-peak is not mapped.
                     mdl = panel_model_map.get(wp, panel_model)
                     if mdl:
-                        label += f" - {panels_per_string}x {mdl}{suffix}"
+                        label += f" - {panels_per_string}x {mdl}"
                     else:
+                        suffix = f" {wp}Wp" if wp > 0 else ""
                         label += f" - {panels_per_string}P{suffix}"
             if show_cable_info:
                 label += f" (L+={l_plus:.3f}m, L-={l_minus:.3f}m, {sec})"
@@ -1208,7 +1209,7 @@ def generate(cfg, log_cb=print):
         if inverter_model:
             parts.append(inverter_model)
         if dc > 0:
-            parts.append(f"P= {dc:.0f} KWp")
+            parts.append("P= " + f"{dc:.2f}".replace('.', ',') + " KWp")
         if ac_power_kwac > 0:
             parts.append(f"P= {ac_power_kwac:.0f} KWac @{temp_rating:.0f}°C")
         return " - ".join(parts)
@@ -1279,7 +1280,7 @@ def generate(cfg, log_cb=print):
                             _ac_parts.append(f"{ac_power_kwac:.0f} kVA @40°C")
                         _ac_line1 = ("AC output power " + " / ".join(_ac_parts)) if _ac_parts else "AC output power"
                         _ac_curr  = f"Max AC output current: {max_ac_current}" if max_ac_current else "Max AC output current:"
-                        _ac_txt   = f"{_ac_line1}\\PNominal AC voltage : 800V, 3F + PE \\P{_ac_curr}"
+                        _ac_txt   = f"{_ac_line1}\\PNominal AC voltage : 800V±10%, 3F + PE \\P{_ac_curr}"
                         _place_entity_stretched(msp, dict(d, text=_ac_txt), dxo, dyo, split_y, EXTRA)
                         continue
                     if 'CC side' in d['text'] or 'MPPT range' in d['text']:
@@ -1345,7 +1346,7 @@ def generate(cfg, log_cb=print):
                     _sl_y = yc + (_panel_lbl_y_offset if _is_panel_row else lbl_dy)
                     _sl_x = _panel_lbl_x if _is_panel_row else STR_X
                     _place_lbl(strlbl_proto, _sl_x, _sl_y,
-                               make_string_label(T, I, m, lookup_p) if active else "reserve",
+                               make_string_label(T, I, m, lookup_p, is_panel_row=_is_panel_row) if active else "reserve",
                                7 if active else 8, dxo, dyo,
                                width=STRING_LABEL_MIN_WIDTH, char_h=text_size_cfg)
                 _draw_combiner(dxo, dyo, grp_ys, f"MPP{m}")
