@@ -918,6 +918,9 @@ def generate(cfg, log_cb=print):
     circ_x        = _term_circ[0]['cx'] if _term_circ else 20945.2
     first_circle_y = max((d['cy'] for d in _term_circ), default=tmpl_y_max)
     tmpl_bottom_y  = min((d['cy'] for d in _term_circ), default=tmpl_y_min)
+    _sorted_circ_ys = sorted((d['cy'] for d in _term_circ), reverse=True)
+    panel_gap = (_sorted_circ_ys[0] - _sorted_circ_ys[1]
+                 if len(_sorted_circ_ys) >= 2 else row_pitch)
 
     # Reference row (port 8-1) anchors: connection (circle) Y, port-label Y, cable end.
     _ref_pl_y = next((d['y'] for mp, pt, d in port_rows if mp == 8 and pt == 1),
@@ -1091,9 +1094,6 @@ def generate(cfg, log_cb=print):
 
     # ── Drawing helpers for the procedural connection region ──────────────────
     def _wire_style(active, section_str):
-        if active and section_str == heavy_section:
-            return {'linetype': heavy_linetype, 'color': heavy_color,
-                    'layer': heavy_layer, 'ltscale': 0.5}
         if active:
             return {'linetype': 'Continuous', 'color': 40, 'layer': '0'}
         return {'linetype': 'Continuous', 'color': 8, 'layer': '0'}
@@ -1261,7 +1261,8 @@ def generate(cfg, log_cb=print):
 
             # Vertical frame stretch: box top + upper content stay fixed; the box bottom
             # and bottom annotations close up just under the last drawn row.
-            bottom_y    = TOP_Y - (total_rows - 1) * row_pitch
+            bottom_y    = (TOP_Y if total_rows <= 1
+                           else TOP_Y - panel_gap - (total_rows - 2) * row_pitch)
             frame_shift = bottom_y - tmpl_bottom_y
             split_y     = max(bottom_y, tmpl_bottom_y) - row_pitch * 0.5
             EXTRA       = -frame_shift           # helper shifts y < split_y by -EXTRA
@@ -1362,7 +1363,7 @@ def generate(cfg, log_cb=print):
                     slots = [(p, (p - 1) < len(lst), p) for p in range(1, eff_k + 1)]
 
                 for slot_p, active, lookup_p in slots:
-                    yc = TOP_Y - gr * row_pitch
+                    yc = TOP_Y if gr == 0 else TOP_Y - panel_gap - (gr - 1) * row_pitch
                     # Panel-detail strip belongs to MPPT 1's first slot (not "global first row")
                     _is_panel_row = (m == 1 and slot_p == slots[0][0])
                     grp_ys.append(yc)
@@ -1378,6 +1379,9 @@ def generate(cfg, log_cb=print):
                     _add_poly([(circ_x + circle_radius_cfg + dxo, yc + dyo),
                                (_ce + dxo, yc + dyo)], style)
                     if active:
+                        _cr = circle_radius_cfg / 1.4142
+                        _add_poly([(circ_x - _cr + dxo, yc - _cr + dyo),
+                                   (circ_x + _cr + dxo, yc - _cr + dyo)])
                         for dd in row_deco:
                             _place_entity(msp, dd, dxo, yc + dyo)
                     _place_lbl(portlbl_proto, PORT_X, yc + lbl_dy, f"{m}-{slot_p}",
