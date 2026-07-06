@@ -925,18 +925,25 @@ def generate(cfg, log_cb=print):
     _ref_conn = min((d['cy'] for d in _term_circ),
                     key=lambda y: abs(y - (_ref_pl_y - 36.0)), default=_ref_pl_y)
     lbl_dy = _ref_pl_y - _ref_conn          # label sits this far above the circle/conn
-    cable_x_end = circ_x + 1225.0
-    for d in tmpl:
-        if d['type'] == 'LWPOLYLINE' and d.get('color') == 40:
-            xs = [p[0] for p in d['pts']]
-            ys = [p[1] for p in d['pts']]
-            if ys and abs(ys[0] - _ref_conn) < row_pitch * 0.5 and max(xs) > circ_x:
-                cable_x_end = max(xs)
-                break
 
     PORT_X = next((d['x'] for mp, pt, d in port_rows if mp == 8 and pt == 1), circ_x - 137.7)
     _strlbls = [m for m in tmpl_texts if m['cls'] == 'string_label']
     STR_X = min((d['x'] for d in _strlbls), default=circ_x + 1237.0)
+
+    # cable_x_end: right termination of a string cable row.
+    # Default = just before the string-label column (works regardless of cable color).
+    # Try to refine from the template: look for any horizontal LWPOLYLINE near the
+    # reference connection Y that extends past the circle but not past STR_X.
+    cable_x_end = STR_X - 20.0
+    for d in tmpl:
+        if d['type'] == 'LWPOLYLINE':
+            xs = [p[0] for p in d['pts']]
+            ys = [p[1] for p in d['pts']]
+            if (xs and ys and max(xs) > circ_x and max(xs) < STR_X
+                    and (max(ys) - min(ys)) < row_pitch * 0.3
+                    and any(abs(y - _ref_conn) < row_pitch * 0.5 for y in ys)):
+                cable_x_end = max(xs)
+                break
 
     # ── Auto-detect layout parameters from template geometry ──────────────────
     # strings_per_mppt: template port labels define the actual slot count; always
@@ -992,6 +999,9 @@ def generate(cfg, log_cb=print):
         if _toff > row_pitch * 0.6:   # genuine panel-detail gap
             _panel_lbl_y_offset = _toff
             _panel_lbl_x        = _topmost_sl['x']
+    # Enforce minimum so 2-line panel-detail label never overlaps the next row.
+    _min_panel_lbl_offset = 2.0 * text_size_cfg * 1.5 - row_pitch + lbl_dy + 20.0
+    _panel_lbl_y_offset = max(_panel_lbl_y_offset, _min_panel_lbl_offset)
 
     # Combiner bus X anchors = vertical bracket polylines inside the box, left of circle.
     _bus_xs = []
@@ -1328,6 +1338,9 @@ def generate(cfg, log_cb=print):
                                    f"\\PMax Vdc : {max_vdc}\\P{_cc_pv}\\P{_cc_sc}"
                                    f"\\PMPPT range :{mppt_voltage_range}")
                         _cc_y = d.get('y', d.get('cy', 0)) + max(0.0, frame_shift)
+                        _cc_floor = (tmpl_bottom_y - row_pitch + frame_shift
+                                     + 7.0 * text_size_cfg * 1.6 + 30.0)
+                        _cc_y = max(_cc_y, _cc_floor)
                         _place_entity_stretched(msp, dict(d, x=BOX_BUS_X - 2800.0, y=_cc_y, text=_cc_txt),
                                                 dxo, dyo, split_y, EXTRA)
                         continue
