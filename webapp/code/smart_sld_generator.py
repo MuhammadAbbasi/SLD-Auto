@@ -928,9 +928,10 @@ def generate(cfg, log_cb=print):
     cable_x_end = circ_x + 1225.0
     for d in tmpl:
         if d['type'] == 'LWPOLYLINE' and d.get('color') == 40:
+            xs = [p[0] for p in d['pts']]
             ys = [p[1] for p in d['pts']]
-            if ys and abs(ys[0] - _ref_conn) < row_pitch * 0.5:
-                cable_x_end = max(p[0] for p in d['pts'])
+            if ys and abs(ys[0] - _ref_conn) < row_pitch * 0.5 and max(xs) > circ_x:
+                cable_x_end = max(xs)
                 break
 
     PORT_X = next((d['x'] for mp, pt, d in port_rows if mp == 8 and pt == 1), circ_x - 137.7)
@@ -988,7 +989,7 @@ def generate(cfg, log_cb=print):
     if _strlbls:
         _topmost_sl = max(_strlbls, key=lambda d: d['y'])
         _toff = _topmost_sl['y'] - first_circle_y
-        if _toff > row_pitch * 1.2:   # genuine panel-detail gap
+        if _toff > row_pitch * 0.6:   # genuine panel-detail gap
             _panel_lbl_y_offset = _toff
             _panel_lbl_x        = _topmost_sl['x']
 
@@ -1316,7 +1317,7 @@ def generate(cfg, log_cb=print):
                         _ac_txt   = f"{_ac_line1}\\PNominal AC voltage : 800V±10%, 3F + PE \\P{_ac_curr}"
                         _place_entity_stretched(msp, dict(d, text=_ac_txt), dxo, dyo, split_y, EXTRA)
                         continue
-                    if 'CC side' in d['text'] or 'MPPT range' in d['text']:
+                    if 'CC side' in _stripped_d or 'MPPT range' in _stripped_d:
                         # DC-side spec block: regenerate dynamically with per-inverter MPPT count
                         _n_inputs = num_mppts * eff_k
                         _cc_pv  = (f"Max PV input current per MPPT: {max_pv_current_per_mppt}"
@@ -1326,7 +1327,8 @@ def generate(cfg, log_cb=print):
                         _cc_txt = (f"CC side\\P{_n_inputs} input - {num_mppts} MPPT"
                                    f"\\PMax Vdc : {max_vdc}\\P{_cc_pv}\\P{_cc_sc}"
                                    f"\\PMPPT range :{mppt_voltage_range}")
-                        _place_entity_stretched(msp, dict(d, x=BOX_BUS_X - 2800.0, text=_cc_txt),
+                        _cc_y = d.get('y', d.get('cy', 0)) + max(0.0, frame_shift)
+                        _place_entity_stretched(msp, dict(d, x=BOX_BUS_X - 2800.0, y=_cc_y, text=_cc_txt),
                                                 dxo, dyo, split_y, EXTRA)
                         continue
                     _place_entity_stretched(msp, d, dxo, dyo, split_y, EXTRA)

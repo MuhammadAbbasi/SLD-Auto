@@ -925,9 +925,12 @@ def generate(cfg, log_cb=print):
     cable_x_end = circ_x + 1225.0
     for d in tmpl:
         if d['type'] == 'LWPOLYLINE' and d.get('color') == 40:
+            xs = [p[0] for p in d['pts']]
             ys = [p[1] for p in d['pts']]
-            if ys and abs(ys[0] - _ref_conn) < row_pitch * 0.5:
-                cable_x_end = max(p[0] for p in d['pts'])
+            # Only pick the right-side cable (from circle outward to string area).
+            # Skip the left cable (BUS_X → circle left-edge) whose max x < circ_x.
+            if ys and abs(ys[0] - _ref_conn) < row_pitch * 0.5 and max(xs) > circ_x:
+                cable_x_end = max(xs)
                 break
 
     PORT_X = next((d['x'] for mp, pt, d in port_rows if mp == 8 and pt == 1), circ_x - 137.7)
@@ -1077,7 +1080,7 @@ def generate(cfg, log_cb=print):
     if _strlbls:
         _topmost_sl = max(_strlbls, key=lambda d: d['y'])
         _toff = _topmost_sl['y'] - first_circle_y
-        if _toff > row_pitch * 1.2:
+        if _toff > row_pitch * 0.6:
             _panel_lbl_y_offset = _toff
             _panel_lbl_x        = _topmost_sl['x']
 
@@ -1116,12 +1119,12 @@ def generate(cfg, log_cb=print):
         _place_mtext(msp, d, dxo, dyo, text)
 
     def _draw_combiner(dxo, dyo, grp_ys, mpp_text):
-        # Vertical bus joining the group's terminals, then a single feed back into the
-        # inverter box bus. The MPP label sits on the feed.
+        # Vertical bus joining the group's terminals; horizontal feed to OUTER_X bus.
+        # The DC switch bracket (OUTER_X vertical + feed to BOX_BUS_X) is drawn in section C.
         yb0, yb1 = grp_ys[0], grp_ys[-1]
         yc = (yb0 + yb1) / 2.0
         _add_poly([(BUS_X + dxo, yb0 + dyo), (BUS_X + dxo, yb1 + dyo)])
-        _add_poly([(BOX_BUS_X + dxo, yc + dyo), (BUS_X + dxo, yc + dyo)])
+        _add_poly([(OUTER_X + dxo, yc + dyo), (BUS_X + dxo, yc + dyo)])
         if mpp_proto:
             _place_lbl(mpp_proto, mpp_proto['x'], yc + lbl_dy, mpp_text, 7, dxo, dyo)
 
@@ -1298,7 +1301,7 @@ def generate(cfg, log_cb=print):
                         _ac_txt   = f"{_ac_line1}\\PNominal AC voltage : 800V±10%, 3F + PE \\P{_ac_curr}"
                         _place_entity_stretched(msp, dict(d, text=_ac_txt), dxo, dyo, split_y, EXTRA)
                         continue
-                    if 'CC side' in d['text'] or 'MPPT range' in d['text']:
+                    if 'CC side' in _stripped_d or 'MPPT range' in _stripped_d:
                         _n_inputs = num_mppts * eff_k
                         _cc_pv  = (f"Max PV input current per MPPT: {max_pv_current_per_mppt}"
                                    if max_pv_current_per_mppt else "Max PV input current per MPPT:")
@@ -1307,8 +1310,11 @@ def generate(cfg, log_cb=print):
                         _cc_txt = (f"CC side\\P{_n_inputs} input - {num_mppts} MPPT"
                                    f"\\PMax Vdc : {max_vdc}\\P{_cc_pv}\\P{_cc_sc}"
                                    f"\\PMPPT range :{mppt_voltage_range}")
-                        _place_entity_stretched(msp, dict(d, x=BOX_BUS_X - 2800.0, text=_cc_txt),
-                                                dxo, dyo, split_y, EXTRA)
+                        # Shift CC text up by frame_shift so it stays inside the box
+                        # when the box bottom rises (frame_shift > 0 = fewer rows than template).
+                        _cc_y = d.get('y', d.get('cy', 0)) + max(0.0, frame_shift)
+                        _cc_d = dict(d, x=BOX_BUS_X - 2800.0, y=_cc_y, text=_cc_txt)
+                        _place_entity_stretched(msp, _cc_d, dxo, dyo, split_y, EXTRA)
                         continue
                     _place_entity_stretched(msp, d, dxo, dyo, split_y, EXTRA)
                 else:
@@ -1366,15 +1372,21 @@ def generate(cfg, log_cb=print):
                                width=STRING_LABEL_MIN_WIDTH, char_h=text_size_cfg)
                 _draw_combiner(dxo, dyo, grp_ys, f"MPP{m}")
 
-            # C. DC-switch labels, grouping MPPTs by `mppts_per_switch`
+            # C. DC-switch brackets + labels, grouping MPPTs by `mppts_per_switch`.
+            # OUTER_X vertical spans the center-Y of the first MPPT to the center-Y of
+            # the last MPPT in the switch (matches the webapp _draw_dc_switch geometry).
             n_sw = (num_mppts + mppts_per_switch - 1) // mppts_per_switch
             for s in range(n_sw):
                 first_m = s * mppts_per_switch + 1
                 last_m  = min((s + 1) * mppts_per_switch, num_mppts)
-                y_top = TOP_Y - ((first_m - 1) * eff_k) * row_pitch
-                y_bot = TOP_Y - (last_m * eff_k - 1) * row_pitch
+                y_first_mid = TOP_Y - ((first_m - 1) * eff_k + (eff_k - 1) / 2.0) * row_pitch
+                y_last_mid  = TOP_Y - ((last_m  - 1) * eff_k + (eff_k - 1) / 2.0) * row_pitch
+                y_sw_mid = (y_first_mid + y_last_mid) / 2.0
+                if mppts_per_switch > 1:
+                    _add_poly([(OUTER_X + dxo, y_first_mid + dyo), (OUTER_X + dxo, y_last_mid + dyo)])
+                _add_poly([(BOX_BUS_X + dxo, y_sw_mid + dyo), (OUTER_X + dxo, y_sw_mid + dyo)])
                 _place_lbl(dc_proto, (dc_proto['x'] if dc_proto else OUTER_X - 100.0),
-                           (y_top + y_bot) / 2.0 + lbl_dy, f"DC SWITCH {s + 1}", 7, dxo, dyo)
+                           y_sw_mid + lbl_dy, f"DC SWITCH {s + 1}", 7, dxo, dyo)
 
             # D. Headers
             if td:
