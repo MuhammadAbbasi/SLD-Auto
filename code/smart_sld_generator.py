@@ -927,20 +927,7 @@ def generate(cfg, log_cb=print):
     _strlbls = [m for m in tmpl_texts if m['cls'] == 'string_label']
     STR_X = min((d['x'] for d in _strlbls), default=circ_x + 1237.0)
 
-    # cable_x_end: right termination of a string cable row.
-    # Default = just before the string-label column (works regardless of cable color).
-    # Try to refine from the template: look for any horizontal LWPOLYLINE near the
-    # reference connection Y that extends past the circle but not past STR_X.
     cable_x_end = STR_X - 20.0
-    for d in tmpl:
-        if d['type'] == 'LWPOLYLINE':
-            xs = [p[0] for p in d['pts']]
-            ys = [p[1] for p in d['pts']]
-            if (xs and ys and max(xs) > circ_x and max(xs) < STR_X
-                    and (max(ys) - min(ys)) < row_pitch * 0.3
-                    and any(abs(y - _ref_conn) < row_pitch * 0.5 for y in ys)):
-                cable_x_end = max(xs)
-                break
 
     # ── Auto-detect layout parameters from template geometry ──────────────────
     # strings_per_mppt: template port labels define the actual slot count; always
