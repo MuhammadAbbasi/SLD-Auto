@@ -1648,10 +1648,24 @@ class SmartSLDGui:
                          anchor="w").pack(padx=8, pady=6, anchor="w")
             self._wp_model_vars = {}
             return
+        # Parse saved panel_model_map (e.g. "720=Jinko JKM720N-...; 655=...") into a lookup dict
+        saved_map = {}
+        for part in re.split(r';\s*', self.var_panel_map.get().strip()):
+            if '=' in part:
+                k, _, v = part.partition('=')
+                try:
+                    saved_map[int(k.strip())] = v.strip()
+                except ValueError:
+                    pass
         default_model = self.var_panel_model.get().strip()
         self._wp_model_vars = {}
         for wp in wp_values:
-            prefill = default_model if len(wp_values) == 1 else ''
+            if wp in saved_map:
+                prefill = saved_map[wp]
+            elif len(wp_values) == 1:
+                prefill = default_model
+            else:
+                prefill = ''
             var = ctk.StringVar(value=prefill)
             self._wp_model_vars[wp] = var
             row = ctk.CTkFrame(self._wp_model_frame, fg_color="transparent")
@@ -1702,6 +1716,10 @@ class SmartSLDGui:
         self._build_step2()
         self._build_step3()
         self._build_step4()
+
+        # Auto-parse saved Excel on startup to restore Wp model fields
+        if self.var_excel.get() and os.path.isfile(self.var_excel.get()):
+            self.root.after(200, self._on_excel_changed)
 
         # ── Fixed Footer ──────────────────────────────────────────────────────
         footer = ctk.CTkFrame(self.root, fg_color=_CARD, corner_radius=0,
