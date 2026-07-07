@@ -1048,7 +1048,7 @@ def generate(cfg, log_cb=print):
     def _is_repeating(d):
         t = d['type']
         if t == 'CIRCLE':
-            return d.get('radius', 99) < 50 and d['cx'] > 20800
+            return d.get('radius', 99) < 50 and 20800 < d['cx'] < 21070
         if t == 'MTEXT':
             s = _strip_mtext_fmt(d['text'])
             return bool(PORT_LBL_RE.match(s) or d.get('cls') == 'string_label'
@@ -1077,16 +1077,43 @@ def generate(cfg, log_cb=print):
     TOP_Y = first_circle_y           # connection Y of the first (top) string row
 
     # Right extent of the panel-detail strip (right connector box right edge).
-    # Used to draw the full-width cable for MPPT-1's first string row instead of
-    # truncating at cable_x_end which only covers the normal string area.
-    _panel_cable_right_x = cable_x_end
+    # Panel-detail strip: detect all color-40 cable geometry from the template.
+    _panel_cable_right_x  = cable_x_end
+    _panel_cable_left_x   = circ_x + circle_radius_cfg
+    _panel_return_y       = first_circle_y - panel_gap * 0.562
+    _panel_top_left_y     = first_circle_y - circle_radius_cfg
+    _panel_top_right_y    = first_circle_y + circle_radius_cfg
+    _panel_loop_left_x    = circ_x + 351.0
+    _panel_loop_drop_x    = circ_x + 439.0
+    _panel_right_stub_end = None
+    _panel_top_stub_left  = None
+    _panel_top_stub_right = None
+    _panel_stub_y         = first_circle_y + circle_radius_cfg
     for _pd in tmpl:
-        if _pd['type'] == 'LWPOLYLINE':
-            _pd_xs = [p[0] for p in _pd.get('pts', [])]
-            _pd_ys = [p[1] for p in _pd.get('pts', [])]
-            if (_pd_xs and max(_pd_xs) > 22000
-                    and any(abs(y - first_circle_y) < row_pitch for y in _pd_ys)):
-                _panel_cable_right_x = max(_panel_cable_right_x, max(_pd_xs))
+        if _pd['type'] != 'LWPOLYLINE' or _pd.get('color') != 40:
+            continue
+        _pts = _pd.get('pts', [])
+        _pxs = [p[0] for p in _pts]; _pys = [p[1] for p in _pts]
+        if not _pxs:
+            continue
+        if not any(abs(y - first_circle_y) < panel_gap for y in _pys):
+            continue
+        _mn, _mx = min(_pxs), max(_pxs)
+        if len(_pts) >= 4 and _mx > 22000:
+            _panel_cable_right_x  = _mx
+            _panel_return_y       = min(_pys)
+            _panel_top_left_y     = _pts[0][1]
+            _panel_top_right_y    = max(_pys)
+            _panel_loop_left_x    = _mn
+            _panel_loop_drop_x    = _pts[1][0]
+            _panel_right_stub_end = _pts[-1][0]
+        elif len(_pts) == 2 and _mn > circ_x:
+            if _mx < circ_x + 300:
+                _panel_cable_left_x = _mx
+            elif _mx < 22000 and max(_pys) > first_circle_y:
+                _panel_top_stub_left  = _mn
+                _panel_top_stub_right = _mx
+                _panel_stub_y         = max(_pys)
     template_rows = len(port_rows)   # 32 for the 16-MPPT / 2-port template
     print(f"Row layout: pitch={row_pitch:.1f} units, template MPPTs={max_tmpl_m}, "
           f"strings/MPPT={strings_per_mppt}, MPPTs/switch={mppts_per_switch}, "
@@ -1374,10 +1401,28 @@ def generate(cfg, log_cb=print):
                     cc.dxf.color = 7 if active else 8
                     _add_poly([(BUS_X + dxo, yc + dyo),
                                (circ_x - circle_radius_cfg + dxo, yc + dyo)], style)
-                    # Panel-detail row: cable must span the full numbered-box strip width
-                    _ce = _panel_cable_right_x if _is_panel_row else cable_x_end
-                    _add_poly([(circ_x + circle_radius_cfg + dxo, yc + dyo),
-                               (_ce + dxo, yc + dyo)], style)
+                    if _is_panel_row:
+                        # Positive cable: circle right edge → "+" terminal left
+                        _add_poly([(circ_x + circle_radius_cfg + dxo, yc + dyo),
+                                   (_panel_cable_left_x + dxo, yc + dyo)], style)
+                        # Top "+" stub (if detected from template)
+                        if _panel_top_stub_left is not None:
+                            _add_poly([(_panel_top_stub_left  + dxo, _panel_stub_y + dyo),
+                                       (_panel_top_stub_right + dxo, _panel_stub_y + dyo)], style)
+                        # 6-pt return loop cable
+                        _rsb = (_panel_right_stub_end if _panel_right_stub_end is not None
+                                else _panel_cable_right_x - 155.0)
+                        _add_poly([
+                            (_panel_loop_left_x   + dxo, _panel_top_left_y  + dyo),
+                            (_panel_loop_drop_x   + dxo, _panel_top_left_y  + dyo),
+                            (_panel_loop_drop_x   + dxo, _panel_return_y    + dyo),
+                            (_panel_cable_right_x + dxo, _panel_return_y    + dyo),
+                            (_panel_cable_right_x + dxo, _panel_top_right_y + dyo),
+                            (_rsb                 + dxo, _panel_top_right_y + dyo),
+                        ], style)
+                    else:
+                        _add_poly([(circ_x + circle_radius_cfg + dxo, yc + dyo),
+                                   (cable_x_end + dxo, yc + dyo)], style)
                     if active:
                         _cr = circle_radius_cfg / 1.4142
                         _add_poly([(circ_x - _cr + dxo, yc - _cr + dyo),
@@ -1411,41 +1456,42 @@ def generate(cfg, log_cb=print):
             if cld:
                 _place_mtext(msp, cld, dxo, dyo, f"\\pxqc;Cabin Tx.{T}\\PInverter {T}.{I}")
 
-    # ── 5. Generate A3 Paper Space Viewports ──────────────────────────────────
+    # ── 5. Generate A3 Paper Space Viewports (one layout per inverter) ───────
     print("Setting up Paper Space layouts...")
     tmpl_x_center = xmin + COL_STEP / 2
-    
+
+    A3_W, A3_H = 420.0, 297.0      # A3 paper mm
+    VP_W, VP_H = 415.9, 292.3      # viewport mm (matches reference DXF margins)
+
     for T in transformer_list:
-        lname = f"Tx{T}"
-        try:
-            layout = doc.layouts.new(lname)
-        except Exception:
-            layout = doc.layouts.get(lname)
-
-        n_inv  = len(transformers[T])
-        row_cx = tmpl_x_center + (n_inv - 1) * col_spacing / 2
-        
-        # Calculate row height bounding box from the procedural row stack
-        min_y_val = tmpl_y_min
         for I in transformers[T]:
+            lname = f"{T}.{I}"
+            try:
+                layout = doc.layouts.new(lname)
+            except Exception:
+                layout = doc.layouts.get(lname)
+
+            dxo = (I - 1) * col_spacing
+            dyo = cabin_y_offset[T]
+
+            model_cx = tmpl_x_center + dxo
+
             _, _, total_rows = _inv_layout(T, I)
-            inv_bottom = TOP_Y - (total_rows - 1) * row_pitch - row_pitch
-            if inv_bottom < min_y_val:
-                min_y_val = inv_bottom
+            inv_bottom = (TOP_Y if total_rows <= 1
+                          else TOP_Y - panel_gap - (total_rows - 2) * row_pitch)
+            model_cy = (tmpl_y_max + inv_bottom) / 2.0 + dyo
 
-        row_cy = cabin_y_offset[T] + (tmpl_y_max + min_y_val) / 2
-        row_w  = col_spacing * n_inv
-        cabin_height = tmpl_y_max - min_y_val
+            content_w = COL_STEP * 1.05
+            content_h = (tmpl_y_max - inv_bottom) * 1.05
+            view_h = max(content_h, content_w * VP_H / VP_W)
 
-        view_h = max(cabin_height * 1.05, row_w / (420.0 / 297.0) * 1.05)
-
-        layout.add_viewport(
-            center=(210, 148.5),
-            size=(420, 297),
-            view_center_point=(row_cx, row_cy),
-            view_height=view_h,
-        )
-        print(f"  Created layout '{lname}' with {n_inv} inverters (View Height: {view_h:.0f})")
+            layout.add_viewport(
+                center=(A3_W / 2, A3_H / 2),
+                size=(VP_W, VP_H),
+                view_center_point=(model_cx, model_cy),
+                view_height=view_h,
+            )
+            print(f"  Layout '{lname}': view_h={view_h:.0f} center=({model_cx:.0f},{model_cy:.0f})")
 
     # ── 6. Save Output ────────────────────────────────────────────────────────
     print(f"Saving generated DXF to: {OUTPUT_PATH}")

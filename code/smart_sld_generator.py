@@ -1032,7 +1032,7 @@ def generate(cfg, log_cb=print):
     def _is_repeating(d):
         t = d['type']
         if t == 'CIRCLE':
-            return d.get('radius', 99) < 50 and d['cx'] > 20800
+            return d.get('radius', 99) < 50 and 20800 < d['cx'] < 21070
         if t == 'MTEXT':
             s = _strip_mtext_fmt(d['text'])
             return bool(PORT_LBL_RE.match(s) or d.get('cls') == 'string_label'
@@ -1060,15 +1060,47 @@ def generate(cfg, log_cb=print):
     frame = [d for d in tmpl if not _is_repeating(d)]
     TOP_Y = first_circle_y           # connection Y of the first (top) string row
 
-    # Panel-detail strip: the first string's cable must extend to the numbered-box edge.
-    _panel_cable_right_x = cable_x_end
+    # Panel-detail strip: detect all color-40 cable geometry from the template.
+    # Three entities to find near first_circle_y:
+    #   1. Short positive cable  (2 pts, circ right → "+" terminal left, max_x < circ+300)
+    #   2. Top "+" stub          (2 pts, max_x < 22000, above circle center)
+    #   3. 6-pt return loop cable (>=4 pts, max_x > 22000)
+    _panel_cable_right_x  = cable_x_end
+    _panel_cable_left_x   = circ_x + circle_radius_cfg
+    _panel_return_y       = first_circle_y - panel_gap * 0.562
+    _panel_top_left_y     = first_circle_y - circle_radius_cfg
+    _panel_top_right_y    = first_circle_y + circle_radius_cfg
+    _panel_loop_left_x    = circ_x + 351.0
+    _panel_loop_drop_x    = circ_x + 439.0
+    _panel_right_stub_end = None
+    _panel_top_stub_left  = None
+    _panel_top_stub_right = None
+    _panel_stub_y         = first_circle_y + circle_radius_cfg
     for _pd in tmpl:
-        if _pd['type'] == 'LWPOLYLINE':
-            _pd_xs = [p[0] for p in _pd.get('pts', [])]
-            _pd_ys = [p[1] for p in _pd.get('pts', [])]
-            if (_pd_xs and max(_pd_xs) > 22000
-                    and any(abs(y - first_circle_y) < row_pitch for y in _pd_ys)):
-                _panel_cable_right_x = max(_panel_cable_right_x, max(_pd_xs))
+        if _pd['type'] != 'LWPOLYLINE' or _pd.get('color') != 40:
+            continue
+        _pts = _pd.get('pts', [])
+        _pxs = [p[0] for p in _pts]; _pys = [p[1] for p in _pts]
+        if not _pxs:
+            continue
+        if not any(abs(y - first_circle_y) < panel_gap for y in _pys):
+            continue
+        _mn, _mx = min(_pxs), max(_pxs)
+        if len(_pts) >= 4 and _mx > 22000:
+            _panel_cable_right_x  = _mx
+            _panel_return_y       = min(_pys)
+            _panel_top_left_y     = _pts[0][1]
+            _panel_top_right_y    = max(_pys)
+            _panel_loop_left_x    = _mn
+            _panel_loop_drop_x    = _pts[1][0]
+            _panel_right_stub_end = _pts[-1][0]
+        elif len(_pts) == 2 and _mn > circ_x:
+            if _mx < circ_x + 300:
+                _panel_cable_left_x = _mx
+            elif _mx < 22000 and max(_pys) > first_circle_y:
+                _panel_top_stub_left  = _mn
+                _panel_top_stub_right = _mx
+                _panel_stub_y         = max(_pys)
 
     # Panel-detail string label offset: capture Y distance from first circle to the
     # "String T.I.1" label, which sits above the panel box strip (not at lbl_dy).
@@ -1138,11 +1170,61 @@ def generate(cfg, log_cb=print):
             eff_k = max(eff_k, layout_k)
         return n_mppts, eff_k, n_mppts * eff_k
 
+    # ── 2c. Extract paper space template layout ────────────────────────────────
+    print("Extracting Paper Space template layout...")
+    tmpl_layout = None
+    # Look for layout containing TESTATA_ORIZ insert
+    for l in doc.layouts:
+        if not l.is_modelspace:
+            has_testata = any(e.dxftype() == 'INSERT' and e.dxf.name == 'TESTATA_ORIZ' for e in l)
+            if has_testata:
+                tmpl_layout = l
+                print(f"  Found template layout: '{l.name}' (contains TESTATA_ORIZ)")
+                break
+    if not tmpl_layout:
+        # Fallback to the first non-modelspace layout
+        for l in doc.layouts:
+            if not l.is_modelspace:
+                tmpl_layout = l
+                print(f"  Fallback template layout: '{l.name}'")
+                break
+
+    paper_entities_to_copy = []
+    tmpl_vp_entity = None
+    tmpl_vp_data = None
+    
+    if tmpl_layout:
+        # Save copies of paper space entities (except viewports)
+        for e in tmpl_layout:
+            if e.dxftype() != 'VIEWPORT':
+                try:
+                    paper_entities_to_copy.append(e.copy())
+                except Exception as ex:
+                    print(f"  [warn] failed to copy paper entity {e.dxftype()} during extraction: {ex}")
+            else:
+                # Store the template viewport specs if it is not ID=1 (overall viewport)
+                if e.dxf.id != 1:
+                    try:
+                        tmpl_vp_entity = e.copy()
+                    except Exception as ex:
+                        print(f"  [warn] failed to copy viewport template: {ex}")
+                    tmpl_vp_data = {
+                        'center': e.dxf.center,
+                        'width': e.dxf.width,
+                        'height': e.dxf.height,
+                        'layer': e.dxf.layer,
+                        'view_height': e.dxf.view_height,
+                    }
+        print(f"  Captured {len(paper_entities_to_copy)} paper space entities and viewport data: {tmpl_vp_data}")
+
     # ── 3. Clean Model Space & Paper Layouts ──────────────────────────────────
     print("Clearing templates from Model Space and existing Viewports...")
     msp.delete_all_entities()
     paper_layouts = [l.name for l in doc.layouts if not l.is_modelspace]
     for name in paper_layouts:
+        if name.lower() == 'tab':
+            print(f"  Preserving layout sheet: '{name}'")
+            continue
         try:
             doc.layouts.delete(name)
         except Exception:
@@ -1360,9 +1442,28 @@ def generate(cfg, log_cb=print):
                     cc.dxf.color = 7 if active else 8
                     _add_poly([(BUS_X + dxo, yc + dyo),
                                (circ_x - circle_radius_cfg + dxo, yc + dyo)], style)
-                    _ce = _panel_cable_right_x if _is_panel_row else cable_x_end
-                    _add_poly([(circ_x + circle_radius_cfg + dxo, yc + dyo),
-                               (_ce + dxo, yc + dyo)], style)
+                    if _is_panel_row:
+                        # Positive cable: circle right edge → "+" terminal left
+                        _add_poly([(circ_x + circle_radius_cfg + dxo, yc + dyo),
+                                   (_panel_cable_left_x + dxo, yc + dyo)], style)
+                        # Top "+" stub (if detected from template)
+                        if _panel_top_stub_left is not None:
+                            _add_poly([(_panel_top_stub_left  + dxo, _panel_stub_y + dyo),
+                                       (_panel_top_stub_right + dxo, _panel_stub_y + dyo)], style)
+                        # 6-pt return loop cable
+                        _rsb = (_panel_right_stub_end if _panel_right_stub_end is not None
+                                else _panel_cable_right_x - 155.0)
+                        _add_poly([
+                            (_panel_loop_left_x   + dxo, _panel_top_left_y  + dyo),
+                            (_panel_loop_drop_x   + dxo, _panel_top_left_y  + dyo),
+                            (_panel_loop_drop_x   + dxo, _panel_return_y    + dyo),
+                            (_panel_cable_right_x + dxo, _panel_return_y    + dyo),
+                            (_panel_cable_right_x + dxo, _panel_top_right_y + dyo),
+                            (_rsb                 + dxo, _panel_top_right_y + dyo),
+                        ], style)
+                    else:
+                        _add_poly([(circ_x + circle_radius_cfg + dxo, yc + dyo),
+                                   (cable_x_end + dxo, yc + dyo)], style)
                     if active:
                         _cr = circle_radius_cfg / 1.4142
                         _add_poly([(circ_x - _cr + dxo, yc - _cr + dyo),
@@ -1389,8 +1490,12 @@ def generate(cfg, log_cb=print):
                 last_m  = min((s + 1) * mppts_per_switch, num_mppts)
                 def _yc_row(gr_f):
                     return TOP_Y if gr_f <= 0 else TOP_Y - panel_gap - (gr_f - 1) * row_pitch
-                y_first_mid = _yc_row((first_m - 1) * eff_k + (eff_k - 1) / 2.0)
-                y_last_mid  = _yc_row((last_m  - 1) * eff_k + (eff_k - 1) / 2.0)
+                # Mirror _draw_combiner: mid = average of first and last row y in the MPPT,
+                # not _yc_row(fraction) which breaks when panel_gap != row_pitch.
+                y_first_mid = (_yc_row((first_m - 1) * eff_k)
+                               + _yc_row((first_m - 1) * eff_k + eff_k - 1)) / 2.0
+                y_last_mid  = (_yc_row((last_m  - 1) * eff_k)
+                               + _yc_row((last_m  - 1) * eff_k + eff_k - 1)) / 2.0
                 y_sw_mid = (y_first_mid + y_last_mid) / 2.0
                 if mppts_per_switch > 1:
                     _add_poly([(OUTER_X + dxo, y_first_mid + dyo), (OUTER_X + dxo, y_last_mid + dyo)])
@@ -1406,41 +1511,95 @@ def generate(cfg, log_cb=print):
             if cld:
                 _place_mtext(msp, cld, dxo, dyo, f"\\pxqc;Cabin Tx.{T}\\PInverter {T}.{I}")
 
-    # ── 5. Generate A3 Paper Space Viewports ──────────────────────────────────
+    # ── 5. Generate A3 Paper Space Viewports (one layout per inverter) ───────
     print("Setting up Paper Space layouts...")
-    tmpl_x_center = xmin + COL_STEP / 2
     
     for T in transformer_list:
-        lname = f"Tx{T}"
-        try:
-            layout = doc.layouts.new(lname)
-        except Exception:
-            layout = doc.layouts.get(lname)
-
-        n_inv  = len(transformers[T])
-        row_cx = tmpl_x_center + (n_inv - 1) * col_spacing / 2
-        
-        # Calculate row height bounding box from the procedural row stack
-        min_y_val = tmpl_y_min
         for I in transformers[T]:
+            lname = f"{T}.{I}"
+            try:
+                layout = doc.layouts.new(lname)
+            except Exception:
+                layout = doc.layouts.get(lname)
+
+            dxo = (I - 1) * col_spacing
+            dyo = cabin_y_offset[T]
+
+            # Red box coordinates in template model space (WCS):
+            # X: 14856.090 to 26917.555 (width 12061.465, center 20886.823)
+            # Y: 158046.755 to 165834.170 (height 7787.415, center 161940.463)
+            red_box_w = 12061.465
+            red_box_h_tmpl = 7787.415
+            red_box_cx_tmpl = 20886.823
+            red_box_cy_tmpl = 161940.463
+
+            # Calculate actual bottom Y of the inverter row stack to determine EXTRA
             _, _, total_rows = _inv_layout(T, I)
-            inv_bottom = TOP_Y - (total_rows - 1) * row_pitch - row_pitch
-            if inv_bottom < min_y_val:
-                min_y_val = inv_bottom
+            inv_bottom = (TOP_Y if total_rows <= 1
+                          else TOP_Y - panel_gap - (total_rows - 2) * row_pitch)
+            
+            # Since frame_shift = inv_bottom - tmpl_bottom_y, and EXTRA = -frame_shift
+            EXTRA = -(inv_bottom - tmpl_bottom_y)
+            
+            # Stretched height of the red box:
+            red_box_h = red_box_h_tmpl - EXTRA
+            
+            # Center of the stretched red box:
+            model_cx = red_box_cx_tmpl + (I - 1) * col_spacing
+            model_cy = red_box_cy_tmpl + EXTRA / 2.0 + dyo
 
-        row_cy = cabin_y_offset[T] + (tmpl_y_max + min_y_val) / 2
-        row_w  = col_spacing * n_inv
-        cabin_height = tmpl_y_max - min_y_val
+            # Viewport size in paper space (A3: 420x297, centered inside printable area)
+            vp_w = 400.0
+            vp_h = 277.0
+            
+            # Calculate view_height to fit the red box completely (with 2% margin for safety)
+            view_h = max(red_box_h, red_box_w * vp_h / vp_w) * 1.02
 
-        view_h = max(cabin_height * 1.05, row_w / (420.0 / 297.0) * 1.05)
+            # Paper space physical page origin offset in printable coordinates
+            phys_ox = -8.228991
+            phys_oy = -8.1189997
 
-        layout.add_viewport(
-            center=(210, 148.5),
-            size=(420, 297),
-            view_center_point=(row_cx, row_cy),
-            view_height=view_h,
-        )
-        print(f"  Created layout '{lname}' with {n_inv} inverters (View Height: {view_h:.0f})")
+            # Exact centered coordinates for physical sheet alignment
+            vp_cx = 201.771018
+            vp_cy = 140.413593
+
+            # Border rectangle (5mm margin from the physical page edge)
+            rect_x0 = phys_ox + 5.0
+            rect_y0 = phys_oy + 5.0
+            rect_x1 = phys_ox + 420.0 - 5.0
+            rect_y1 = phys_oy + 297.0 - 5.0
+
+            # Draw border rectangle aligned to paper background
+            layout.add_lwpolyline(
+                [(rect_x0, rect_y0), (rect_x1, rect_y0), (rect_x1, rect_y1), (rect_x0, rect_y1)],
+                close=True,
+                dxfattribs={'color': 7, 'layer': '0'}
+            )
+
+            # Create the overall paper space viewport (ID=1) required by AutoCAD layout context
+            vp_overall = layout.add_viewport(
+                center=(210.0, 148.5),
+                size=(420.0, 297.0),
+                view_center_point=(210.0, 148.5),
+                view_height=297.0,
+            )
+            vp_overall.dxf.id = 1
+            vp_overall.dxf.status = 1
+            vp_overall.dxf.layer = 'Defpoints'
+
+            # Create the active model space viewport (ID=2) centered on the inverter data
+            vp = layout.add_viewport(
+                center=(vp_cx, vp_cy),
+                size=(vp_w, vp_h),
+                view_center_point=(model_cx, model_cy),
+                view_height=view_h,
+            )
+            vp.dxf.id = 2
+            vp.dxf.view_target_point = (0.0, 0.0, 0.0)
+            vp.dxf.layer = 'Defpoints'
+            vp.dxf.status = 2  # active
+            
+            print(f"  Layout '{lname}': view_h={view_h:.0f} center=({model_cx:.0f},{model_cy:.0f})")
 
     # ── 6. Save Output ────────────────────────────────────────────────────────
     print(f"Saving generated DXF to: {OUTPUT_PATH}")
@@ -1522,6 +1681,54 @@ def _card(parent, title):
     body = ctk.CTkFrame(outer, fg_color="transparent")
     body.pack(fill="x", padx=20, pady=(0, 16))
     return body
+
+
+class ToolTip(object):
+    def __init__(self, widget):
+        self.widget = widget
+        self.tipwindow = None
+        self.id = None
+        self.x = self.y = 0
+
+    def showtip(self, text):
+        "Display text in tooltip window"
+        self.text = text
+        if self.tipwindow or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(1)
+        tw.wm_geometry("+%d+%d" % (x, y))
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                         background="#FFFFE0", relief=tk.SOLID, borderwidth=1,
+                         font=("Segoe UI", "9", "normal"), fg="#333333", padx=6, pady=4)
+        label.pack(ipadx=1)
+
+    def hidetip(self):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
+def create_tooltip(widget, text):
+    toolTip = ToolTip(widget)
+    def enter(event):
+        toolTip.showtip(text)
+    def leave(event):
+        toolTip.hidetip()
+    
+    widget.bind('<Enter>', enter, add='+')
+    widget.bind('<Leave>', leave, add='+')
+    
+    for sub in ('_entry', 'entry', '_cb', 'cb', '_canvas', 'canvas'):
+        if hasattr(widget, sub):
+            try:
+                w = getattr(widget, sub)
+                w.bind('<Enter>', enter, add='+')
+                w.bind('<Leave>', leave, add='+')
+            except Exception:
+                pass
 
 
 class SmartSLDGui:
@@ -1935,7 +2142,7 @@ class SmartSLDGui:
                               fg_color="white", border_color=_BORDER,
                               font=("Segoe UI", 11), width=width or 120)
             e.pack(side="left", fill="x", expand=(width is None))
-            return f
+            return e
 
         # Left column
         # Inverter model
@@ -1950,6 +2157,8 @@ class SmartSLDGui:
                                        fg_color="white", border_color=_BORDER,
                                        font=("Segoe UI", 11))
         self.cb_inv.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        create_tooltip(self.cb_inv, "Seleziona o digita il modello dell'inverter.\nEs. TBEA TS300KTL-HV-C1")
+
         ctk.CTkButton(f_inv, text="+", width=32, height=32, corner_radius=6,
                        fg_color="#E8EAED", text_color=_BLUE, hover_color="#C8D4EC",
                        font=("Segoe UI", 13, "bold"),
@@ -1959,15 +2168,32 @@ class SmartSLDGui:
                        font=("Segoe UI", 13),
                        command=self._manage_inverters).pack(side="left")
 
-        _lbl_entry(col_l, "Potenza DC (kWp):", self.var_dc_power, 100)
-        _lbl_entry(col_l, "Potenza AC @40°C (kVA):", self.var_ac_power, 100)
-        _lbl_entry(col_l, "Potenza AC @30°C (kVA):", self.var_ac_power_30c, 100)
-        _lbl_entry(col_l, "Corrente AC max:", self.var_max_ac_current, 120)
-        _lbl_entry(col_l, "Temperatura (°C):", self.var_temp, 100)
-        _lbl_entry(col_l, "I max PV per MPPT:", self.var_max_pv_current, 120)
-        _lbl_entry(col_l, "I cc max per MPPT:", self.var_max_dc_sc, 120)
-        _lbl_entry(col_l, "Range tensione MPPT:", self.var_mppt_vrange, 140)
-        _lbl_entry(col_l, "Vdc max:", self.var_max_vdc, 120)
+        e_dc = _lbl_entry(col_l, "Potenza DC (kWp):", self.var_dc_power, 100)
+        create_tooltip(e_dc, "Potenza nominale in ingresso lato CC (DC) dell'inverter.\nEs. 342.72")
+
+        e_ac = _lbl_entry(col_l, "Potenza AC @40°C (kVA):", self.var_ac_power, 100)
+        create_tooltip(e_ac, "Potenza nominale in uscita AC a 40°C (kVA).\nEs. 320")
+
+        e_ac_30 = _lbl_entry(col_l, "Potenza AC @30°C (kVA):", self.var_ac_power_30c, 100)
+        create_tooltip(e_ac_30, "Potenza nominale in uscita AC a 30°C (kVA).\nEs. 363")
+
+        e_curr = _lbl_entry(col_l, "Corrente AC max:", self.var_max_ac_current, 120)
+        create_tooltip(e_curr, "Massima corrente alternata AC in uscita dall'inverter (A).\nEs. 262")
+
+        e_temp = _lbl_entry(col_l, "Temperatura (°C):", self.var_temp, 100)
+        create_tooltip(e_temp, "Temperatura ambiente nominale di esercizio dell'inverter (°C).\nEs. 40")
+
+        e_pv = _lbl_entry(col_l, "I max PV per MPPT:", self.var_max_pv_current, 120)
+        create_tooltip(e_pv, "Massima corrente DC di ingresso per ciascun canale MPPT (A).\nEs. 65")
+
+        e_cc = _lbl_entry(col_l, "I cc max per MPPT:", self.var_max_dc_sc, 120)
+        create_tooltip(e_cc, "Massima corrente DC di cortocircuito per ciascun canale MPPT (A).\nEs. 115")
+
+        e_range = _lbl_entry(col_l, "Range tensione MPPT:", self.var_mppt_vrange, 140)
+        create_tooltip(e_range, "Intervallo di tensione di funzionamento dell'inseguitore MPPT (V).\nEs. 500...1500V")
+
+        e_vdc = _lbl_entry(col_l, "Vdc max:", self.var_max_vdc, 120)
+        create_tooltip(e_vdc, "Massima tensione DC assoluta ammessa in ingresso all'inverter (V).\nEs. 1500V")
 
         # Right column
         # Panel model
@@ -1981,6 +2207,8 @@ class SmartSLDGui:
                                          fg_color="white", border_color=_BORDER,
                                          font=("Segoe UI", 11))
         self.cb_panel.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        create_tooltip(self.cb_panel, "Seleziona o inserisci il modello dei pannelli fotovoltaici.\nEs. Jinko JKM725N-66HL5-BD")
+
         ctk.CTkButton(f_pan, text="+", width=32, height=32, corner_radius=6,
                        fg_color="#E8EAED", text_color=_BLUE, hover_color="#C8D4EC",
                        font=("Segoe UI", 13, "bold"),
@@ -1995,10 +2223,12 @@ class SmartSLDGui:
         f_pps.pack(fill="x", pady=4)
         ctk.CTkLabel(f_pps, text="Pannelli per Stringa:", text_color=_TEXT, anchor="w",
                       font=("Segoe UI", 12), width=170).pack(side="left")
-        ctk.CTkEntry(f_pps, textvariable=self.var_panels, width=80,
-                      height=32, corner_radius=6,
-                      fg_color="white", border_color=_BORDER,
-                      font=("Segoe UI", 11)).pack(side="left")
+        self.entry_panels = ctk.CTkEntry(f_pps, textvariable=self.var_panels, width=80,
+                                          height=32, corner_radius=6,
+                                          fg_color="white", border_color=_BORDER,
+                                          font=("Segoe UI", 11))
+        self.entry_panels.pack(side="left")
+        create_tooltip(self.entry_panels, "Numero di pannelli fotovoltaici collegati in serie per ogni stringa.\nEs. 28")
 
         # Panel model map – dynamic per-Wp fields, auto-populated when Excel is loaded
         f_pmap_hdr = ctk.CTkFrame(col_r, fg_color="transparent")
@@ -2020,20 +2250,24 @@ class SmartSLDGui:
         f_spm.pack(fill="x", pady=4)
         ctk.CTkLabel(f_spm, text="Stringhe per MPPT:", text_color=_TEXT, anchor="w",
                       font=("Segoe UI", 12), width=170).pack(side="left")
-        ctk.CTkEntry(f_spm, textvariable=self.var_strings_mppt, width=80,
-                      height=32, corner_radius=6,
-                      fg_color="white", border_color=_BORDER,
-                      font=("Segoe UI", 11)).pack(side="left")
+        self.entry_strings_mppt = ctk.CTkEntry(f_spm, textvariable=self.var_strings_mppt, width=80,
+                                                height=32, corner_radius=6,
+                                                fg_color="white", border_color=_BORDER,
+                                                font=("Segoe UI", 11))
+        self.entry_strings_mppt.pack(side="left")
+        create_tooltip(self.entry_strings_mppt, "Numero massimo di stringhe collegate a ciascun canale MPPT.\nEs. 5")
 
         # MPPTs per DC switch – how many MPPTs grouped under each DC-switch label
         f_mps = ctk.CTkFrame(col_r, fg_color="transparent")
         f_mps.pack(fill="x", pady=4)
         ctk.CTkLabel(f_mps, text="MPPT per Sezionatore DC:", text_color=_TEXT, anchor="w",
                       font=("Segoe UI", 12), width=170).pack(side="left")
-        ctk.CTkEntry(f_mps, textvariable=self.var_mppts_switch, width=80,
-                      height=32, corner_radius=6,
-                      fg_color="white", border_color=_BORDER,
-                      font=("Segoe UI", 11)).pack(side="left")
+        self.entry_mppts_switch = ctk.CTkEntry(f_mps, textvariable=self.var_mppts_switch, width=80,
+                                                height=32, corner_radius=6,
+                                                fg_color="white", border_color=_BORDER,
+                                                font=("Segoe UI", 11))
+        self.entry_mppts_switch.pack(side="left")
+        create_tooltip(self.entry_mppts_switch, "Canali MPPT raggruppati per ogni sezionatore/interruttore DC.\nEs. 2")
 
     # ── Step 3: Styles & geometry ─────────────────────────────────────────────
     def _build_step3(self):
